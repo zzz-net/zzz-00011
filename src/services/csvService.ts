@@ -13,8 +13,9 @@ import type {
   AuditLog,
   ReviewRules,
   ReviewHistoryEntry,
+  HandoverRecord,
 } from '@/types';
-import { AUDIT_ACTION_LABEL } from '@/services/anomalyEngine';
+import { AUDIT_ACTION_LABEL, HANDOVER_STATUS_LABEL, ANOMALY_TYPE_LABEL, CONCLUSION_LABEL } from '@/services/anomalyEngine';
 
 const REQUIRED_COLUMNS: Record<FileType, string[]> = {
   arrival: ['batchId', 'productName', 'arrivalTime', 'requiredTempMin', 'requiredTempMax'],
@@ -380,6 +381,102 @@ export function buildExportJson(
         ? Object.fromEntries(Object.entries(reviewHistory).filter(([k]) => batchIds.has(k)))
         : undefined,
       auditLogs: auditLogs ?? [],
+    },
+    null,
+    2,
+  );
+}
+
+export function buildHandoverExportCsv(
+  handoverRecords: HandoverRecord[],
+): string {
+  const headers = [
+    '交接ID',
+    '交接标题',
+    '状态',
+    '交接人',
+    '接收人',
+    '截止时间',
+    '备注',
+    '退回原因',
+    '完成备注',
+    '创建时间',
+    '接收时间',
+    '完成时间',
+    '异常条目数',
+  ];
+  const sevMap: Record<string, string> = { warning: '警告', danger: '严重' };
+  const rows = handoverRecords.map((h) => {
+    return [
+      h.id,
+      h.title,
+      HANDOVER_STATUS_LABEL[h.status] ?? h.status,
+      h.handedBy,
+      h.receivedBy,
+      h.deadline,
+      h.remark ?? '',
+      h.returnReason ?? '',
+      h.completedRemark ?? '',
+      h.createdAt,
+      h.acceptedAt ?? '',
+      h.completedAt ?? '',
+      h.items.length,
+    ]
+      .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+      .join(',');
+  });
+
+  let result = [headers.join(','), ...rows].join('\n');
+
+  result += '\n\n';
+  const itemHeaders = [
+    '交接ID',
+    '异常ID',
+    '批次号',
+    '异常类型',
+    '严重级别',
+    '原始复核状态',
+    '原始复核人',
+    '原始备注',
+    '异常描述',
+    '原始行号',
+    '规则快照',
+  ];
+  const itemRows: string[] = [];
+  for (const h of handoverRecords) {
+    for (const item of h.items) {
+      itemRows.push(
+        [
+          h.id,
+          item.anomalyId,
+          item.batchId,
+          ANOMALY_TYPE_LABEL[item.anomalyType] ?? item.anomalyType,
+          sevMap[item.severity] ?? item.severity,
+          CONCLUSION_LABEL[item.originalConclusion] ?? item.originalConclusion,
+          item.originalReviewer ?? '',
+          item.originalRemark ?? '',
+          item.description,
+          item.sourceRows.join(';'),
+          JSON.stringify(item.rulesSnapshot),
+        ]
+          .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+          .join(','),
+      );
+    }
+  }
+  result += [itemHeaders.join(','), ...itemRows].join('\n');
+
+  return result;
+}
+
+export function buildHandoverExportJson(
+  handoverRecords: HandoverRecord[],
+  exportTime: string,
+): string {
+  return JSON.stringify(
+    {
+      exportedAt: exportTime,
+      handoverRecords,
     },
     null,
     2,

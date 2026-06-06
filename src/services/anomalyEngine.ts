@@ -367,4 +367,23 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   export_data: '导出数据',
   export_rules_package: '导出规则配置包',
   import_rules_package: '导入规则配置包',
+  create_handover: '创建交接清单',
+  accept_handover: '接收交接任务',
+  return_handover: '退回交接任务',
+  complete_handover: '完成交接复核',
+  handover_conflict: '交接处理冲突',
+};
+
+export const HANDOVER_STATUS_LABEL: Record<string, string> = {
+  pending: '待接收',
+  accepted: '处理中',
+  returned: '已退回',
+  completed: '已完成',
+};
+
+export const HANDOVER_STATUS_COLOR: Record<string, string> = {
+  pending: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+  accepted: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+  returned: 'bg-red-500/20 text-red-300 border-red-500/40',
+  completed: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
 };

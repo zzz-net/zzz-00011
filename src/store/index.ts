@@ -7,6 +7,10 @@ import type {
   AuditLog,
   AuditLogFilter,
   FilterState,
+  HandoverFilterState,
+  HandoverItemSnapshot,
+  HandoverLock,
+  HandoverRecord,
   ImportResult,
   ManualReviewRecord,
   ReviewConclusion,
@@ -21,6 +25,8 @@ import { DEFAULT_REVIEW_RULES, PERSIST_STORAGE_KEY } from '@/types';
 import {
   buildExportCsv,
   buildExportJson,
+  buildHandoverExportCsv,
+  buildHandoverExportJson,
   buildImportRecord,
   computeFileHash,
   downloadFile,
@@ -48,8 +54,19 @@ const initialAuditLogFilter: AuditLogFilter = {
   operator: '',
 };
 
+const initialHandoverFilter: HandoverFilterState = {
+  keyword: '',
+  statuses: [],
+  handedBy: '',
+  receivedBy: '',
+};
+
 function genAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function genHandoverId(): string {
+  return `HO-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 }
 
 function createAuditLog(
@@ -91,6 +108,10 @@ export const useAppStore = create<AppState>()(
         auditLogFilter: initialAuditLogFilter,
         selectedBatchId: null,
         rulesPackagePreview: null,
+
+        handoverRecords: [],
+        handoverLocks: [],
+        handoverFilter: initialHandoverFilter,
 
         importArrivals: async (file: File): Promise<ImportResult> => {
         const existing = get().arrivalBatches;
@@ -435,6 +456,9 @@ export const useAppStore = create<AppState>()(
           filters: initialFilters,
           selectedBatchId: null,
           rulesPackagePreview: null,
+          handoverRecords: [],
+          handoverLocks: [],
+          handoverFilter: initialHandoverFilter,
         });
       },
 
@@ -519,6 +543,260 @@ export const useAppStore = create<AppState>()(
       clearRulesPackagePreview: () => {
         set({ rulesPackagePreview: null });
       },
+
+      setHandoverFilter: (filters: Partial<HandoverFilterState>) =>
+        set((s) => ({ handoverFilter: { ...s.handoverFilter, ...filters } })),
+
+      createHandover: (params) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        if (!params.receivedBy.trim()) return null;
+        if (params.anomalyIds.length === 0) return null;
+
+        const items: HandoverItemSnapshot[] = [];
+        for (const aid of params.anomalyIds) {
+          const anomaly = s.anomalies.find((a) => a.id === aid);
+          if (!anomaly) continue;
+          const decision = s.reviewDecisions[anomaly.batchId];
+          items.push({
+            anomalyId: anomaly.id,
+            batchId: anomaly.batchId,
+            anomalyType: anomaly.type,
+            severity: anomaly.severity,
+            description: anomaly.description,
+            sourceRows: anomaly.sourceRows,
+            originalConclusion: decision?.conclusion ?? 'unreviewed',
+            originalReviewer: decision?.reviewer,
+            originalRemark: decision?.remark,
+            rulesSnapshot: { ...s.reviewRules },
+          });
+        }
+        if (items.length === 0) return null;
+
+        const record: HandoverRecord = {
+          id: genHandoverId(),
+          title: params.title.trim() || `交接清单 ${new Date().toLocaleString('zh-CN')}`,
+          items,
+          handedBy: reviewer,
+          receivedBy: params.receivedBy.trim(),
+          remark: params.remark,
+          deadline: params.deadline,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          version: 1,
+        };
+
+        set((st) => ({ handoverRecords: [record, ...st.handoverRecords] }));
+        appendAudit(
+          createAuditLog(
+            'create_handover',
+            reviewer,
+            `创建交接清单 ${record.id}：${items.length} 条异常，交接给 ${record.receivedBy}，截止 ${record.deadline}`,
+            {
+              handoverId: record.id,
+              itemCount: items.length,
+              receivedBy: record.receivedBy,
+              deadline: record.deadline,
+              title: record.title,
+            },
+          ),
+        );
+        return record;
+      },
+
+      acceptHandover: (handoverId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const record = s.handoverRecords.find((h) => h.id === handoverId);
+        if (!record) return { success: false, message: '交接记录不存在' };
+        if (record.receivedBy !== reviewer) {
+          return { success: false, message: `该交接任务的接收人是 ${record.receivedBy}，您无权接收` };
+        }
+        if (record.status !== 'pending' && record.status !== 'returned') {
+          return { success: false, message: `当前状态 ${record.status} 不可接收` };
+        }
+
+        set((st) => ({
+          handoverRecords: st.handoverRecords.map((h) =>
+            h.id === handoverId
+              ? {
+                  ...h,
+                  status: 'accepted',
+                  acceptedAt: new Date().toISOString(),
+                  lastUpdatedBy: reviewer,
+                  lastUpdatedAt: new Date().toISOString(),
+                  version: h.version + 1,
+                }
+              : h,
+          ),
+        }));
+        appendAudit(
+          createAuditLog(
+            'accept_handover',
+            reviewer,
+            `接收交接任务 ${handoverId}`,
+            { handoverId, itemCount: record.items.length },
+          ),
+        );
+        return { success: true, message: '已成功接收交接任务' };
+      },
+
+      returnHandover: (handoverId, reason) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const record = s.handoverRecords.find((h) => h.id === handoverId);
+        if (!record) return { success: false, message: '交接记录不存在' };
+        if (record.receivedBy !== reviewer) {
+          return { success: false, message: `该交接任务的接收人是 ${record.receivedBy}，您无权退回` };
+        }
+        if (record.status !== 'accepted') {
+          return { success: false, message: `当前状态 ${record.status} 不可退回` };
+        }
+
+        set((st) => ({
+          handoverRecords: st.handoverRecords.map((h) =>
+            h.id === handoverId
+              ? {
+                  ...h,
+                  status: 'returned',
+                  returnReason: reason,
+                  returnedAt: new Date().toISOString(),
+                  lastUpdatedBy: reviewer,
+                  lastUpdatedAt: new Date().toISOString(),
+                  version: h.version + 1,
+                }
+              : h,
+          ),
+          handoverLocks: st.handoverLocks.filter((l) => l.handoverId !== handoverId),
+        }));
+        appendAudit(
+          createAuditLog(
+            'return_handover',
+            reviewer,
+            `退回交接任务 ${handoverId}，原因：${reason || '未填写'}`,
+            { handoverId, reason, itemCount: record.items.length },
+          ),
+        );
+        return { success: true, message: '已退回交接任务' };
+      },
+
+      completeHandover: (handoverId, remark, decisions) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const record = s.handoverRecords.find((h) => h.id === handoverId);
+        if (!record) return { success: false, message: '交接记录不存在' };
+        if (record.receivedBy !== reviewer) {
+          return { success: false, message: `该交接任务的接收人是 ${record.receivedBy}，您无权完成` };
+        }
+        if (record.status !== 'accepted') {
+          return { success: false, message: `当前状态 ${record.status} 不可完成` };
+        }
+
+        for (const d of decisions) {
+          get().setReviewDecision(d.batchId, d.conclusion, d.remark || remark || '交接复核完成');
+        }
+
+        set((st) => ({
+          handoverRecords: st.handoverRecords.map((h) =>
+            h.id === handoverId
+              ? {
+                  ...h,
+                  status: 'completed',
+                  completedRemark: remark,
+                  completedAt: new Date().toISOString(),
+                  lastUpdatedBy: reviewer,
+                  lastUpdatedAt: new Date().toISOString(),
+                  version: h.version + 1,
+                }
+              : h,
+          ),
+          handoverLocks: st.handoverLocks.filter((l) => l.handoverId !== handoverId),
+        }));
+        appendAudit(
+          createAuditLog(
+            'complete_handover',
+            reviewer,
+            `完成交接任务 ${handoverId}：${decisions.length} 条复核，${remark ? `备注：${remark}` : ''}`,
+            { handoverId, remark, decisionsCount: decisions.length, itemCount: record.items.length },
+          ),
+        );
+        return { success: true, message: '已完成交接任务并提交复核结论' };
+      },
+
+      acquireItemLock: (handoverId, anomalyId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const existing = s.handoverLocks.find(
+          (l) => l.handoverId === handoverId && l.itemAnomalyId === anomalyId,
+        );
+        if (existing) {
+          if (existing.lockedBy === reviewer) {
+            return { success: true, message: '您已锁定该条目' };
+          }
+          appendAudit(
+            createAuditLog(
+              'handover_conflict',
+              reviewer,
+              `尝试编辑交接 ${handoverId} 条目 ${anomalyId}，被 ${existing.lockedBy} 锁定`,
+              { handoverId, anomalyId, lockedBy: existing.lockedBy, lockedAt: existing.lockedAt },
+            ),
+          );
+          return {
+            success: false,
+            message: `该条目正在被 ${existing.lockedBy} 处理，请稍后再试`,
+            lockedBy: existing.lockedBy,
+          };
+        }
+        const lock: HandoverLock = {
+          handoverId,
+          itemAnomalyId: anomalyId,
+          lockedBy: reviewer,
+          lockedAt: new Date().toISOString(),
+        };
+        set((st) => ({ handoverLocks: [...st.handoverLocks, lock] }));
+        return { success: true, message: '已锁定' };
+      },
+
+      releaseItemLock: (handoverId, anomalyId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        set((st) => ({
+          handoverLocks: st.handoverLocks.filter(
+            (l) =>
+              !(l.handoverId === handoverId && l.itemAnomalyId === anomalyId && l.lockedBy === reviewer),
+          ),
+        }));
+      },
+
+      exportHandoverData: (format, handoverIds) => {
+        const s = get();
+        let records = s.handoverRecords;
+        if (handoverIds && handoverIds.length > 0) {
+          records = records.filter((h) => handoverIds.includes(h.id));
+        } else {
+          records = applyHandoverFilters(records, s.handoverFilter);
+        }
+        const exportTime = new Date().toISOString();
+        const ts = exportTime.replace(/[:.]/g, '-').slice(0, 19);
+        const reviewer = s.currentReviewer || '未知复核人';
+
+        appendAudit(
+          createAuditLog(
+            'export_data',
+            reviewer,
+            `导出交接记录：${format.toUpperCase()}，共 ${records.length} 条`,
+            { format, handoverCount: records.length, handoverIds: handoverIds ?? null },
+          ),
+        );
+
+        if (format === 'csv') {
+          const content = buildHandoverExportCsv(records);
+          downloadFile(content, `cold-chain-handovers-${ts}.csv`, 'text/csv;charset=utf-8');
+        } else {
+          const content = buildHandoverExportJson(records, exportTime);
+          downloadFile(content, `cold-chain-handovers-${ts}.json`, 'application/json');
+        }
+      },
     });
   },
   {
@@ -537,6 +815,9 @@ export const useAppStore = create<AppState>()(
         filters: state.filters,
         auditLogFilter: state.auditLogFilter,
         rulesPackagePreview: state.rulesPackagePreview,
+        handoverRecords: state.handoverRecords,
+        handoverLocks: state.handoverLocks,
+        handoverFilter: state.handoverFilter,
       }),
     },
   ),
@@ -612,3 +893,50 @@ export function getBatchMetrics(
 }
 
 export type { ArrivalBatch, TemperatureLog, ManualReviewRecord };
+
+export function applyHandoverFilters(
+  records: HandoverRecord[],
+  filters: HandoverFilterState,
+): HandoverRecord[] {
+  return records.filter((h) => {
+    if (filters.keyword) {
+      const kw = filters.keyword.toLowerCase();
+      if (
+        !h.id.toLowerCase().includes(kw) &&
+        !h.title.toLowerCase().includes(kw) &&
+        !h.handedBy.toLowerCase().includes(kw) &&
+        !h.receivedBy.toLowerCase().includes(kw) &&
+        !h.remark.toLowerCase().includes(kw)
+      ) {
+        return false;
+      }
+    }
+    if (filters.statuses.length > 0 && !filters.statuses.includes(h.status)) return false;
+    if (filters.handedBy && !h.handedBy.toLowerCase().includes(filters.handedBy.toLowerCase())) return false;
+    if (filters.receivedBy && !h.receivedBy.toLowerCase().includes(filters.receivedBy.toLowerCase())) return false;
+    return true;
+  });
+}
+
+export function getHandoverMetrics(
+  records: HandoverRecord[],
+  currentReviewer: string,
+) {
+  const myPending = records.filter(
+    (h) => h.receivedBy === currentReviewer && (h.status === 'pending' || h.status === 'returned'),
+  ).length;
+  const myAccepted = records.filter(
+    (h) => h.receivedBy === currentReviewer && h.status === 'accepted',
+  ).length;
+  const myCompleted = records.filter(
+    (h) => h.receivedBy === currentReviewer && h.status === 'completed',
+  ).length;
+  const createdByMe = records.filter((h) => h.handedBy === currentReviewer).length;
+  return {
+    total: records.length,
+    myPending,
+    myAccepted,
+    myCompleted,
+    createdByMe,
+  };
+}

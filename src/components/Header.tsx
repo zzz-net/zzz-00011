@@ -1,14 +1,16 @@
-import { Snowflake, User, HelpCircle, RotateCcw, DatabaseZap } from 'lucide-react';
-import { useAppStore } from '@/store';
+import { Snowflake, User, HelpCircle, RotateCcw, DatabaseZap, ClipboardList } from 'lucide-react';
+import { useAppStore, getHandoverMetrics } from '@/store';
 import { useState } from 'react';
 import type { FC } from 'react';
 
 interface HeaderProps {
   onOpenHelp: () => void;
+  onCreateHandover: () => void;
 }
 
-const Header: FC<HeaderProps> = ({ onOpenHelp }) => {
-  const { currentReviewer, setCurrentReviewer, loadSampleData, clearAll, arrivalBatches } = useAppStore();
+const Header: FC<HeaderProps> = ({ onOpenHelp, onCreateHandover }) => {
+  const { currentReviewer, setCurrentReviewer, loadSampleData, clearAll, arrivalBatches, handoverRecords } = useAppStore();
+  const metrics = getHandoverMetrics(handoverRecords, currentReviewer);
   const [editing, setEditing] = useState(!currentReviewer);
   const [name, setName] = useState(currentReviewer);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -50,6 +52,19 @@ const Header: FC<HeaderProps> = ({ onOpenHelp }) => {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={onCreateHandover}
+            className="group relative flex items-center gap-2 rounded-md border border-lime-500/30 bg-lime-500/10 px-3 py-1.5 text-sm text-lime-300 transition hover:border-lime-400/60 hover:bg-lime-500/20"
+          >
+            <ClipboardList className="h-4 w-4 transition group-hover:scale-110" />
+            <span>创建交接</span>
+            {metrics.myPending > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
+                {metrics.myPending}
+              </span>
+            )}
+          </button>
+
           <button
             onClick={() => {
               loadSampleData();

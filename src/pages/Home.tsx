@@ -8,6 +8,8 @@ import ReviewModal from '@/components/ReviewModal';
 import HelpDrawer from '@/components/HelpDrawer';
 import RulesPanel from '@/components/RulesPanel';
 import AuditLogPanel from '@/components/AuditLogPanel';
+import HandoverPanel from '@/components/HandoverPanel';
+import HandoverCreateModal from '@/components/HandoverCreateModal';
 
 export default function Home() {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -15,6 +17,7 @@ export default function Home() {
     open: false,
     batchId: '',
   });
+  const [handoverCreateOpen, setHandoverCreateOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -33,7 +36,7 @@ export default function Home() {
       />
 
       <div className="relative">
-        <Header onOpenHelp={() => setHelpOpen(true)} />
+        <Header onOpenHelp={() => setHelpOpen(true)} onCreateHandover={() => setHandoverCreateOpen(true)} />
 
         <main className="mx-auto max-w-[1600px] space-y-5 px-6 py-6">
           <ImportPanel />
@@ -51,12 +54,14 @@ export default function Home() {
             <AnomalyTable onOpenReview={(bid) => setReviewModal({ open: true, batchId: bid })} />
           </div>
 
+          <HandoverPanel />
+
           <AuditLogPanel />
 
           <footer className="border-t border-slate-800/60 pt-4 pb-8 text-center text-[10.5px] text-slate-500">
             <p>冷链到货温控复核看板 · 数据完全存储于本地浏览器 · 不依赖外部系统</p>
             <p className="mt-1">
-              所有复核决策 / 规则配置 / 审计日志在页面刷新后自动保留 · 点击右上角 <span className="text-sky-400">?</span> 查看异常复现文档
+              所有复核决策 / 规则配置 / 审计日志 / 交接记录在页面刷新后自动保留 · 点击右上角 <span className="text-sky-400">?</span> 查看异常复现文档
             </p>
           </footer>
         </main>
@@ -68,6 +73,10 @@ export default function Home() {
         onClose={() => setReviewModal({ open: false, batchId: '' })}
       />
       <HelpDrawer open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <HandoverCreateModal
+        open={handoverCreateOpen}
+        onClose={() => setHandoverCreateOpen(false)}
+      />
     </div>
   );
 }

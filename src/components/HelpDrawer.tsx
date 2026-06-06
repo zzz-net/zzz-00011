@@ -275,6 +275,68 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
             </div>
           </div>
 
+          <div className="mt-6 rounded-lg border border-slate-700/60 bg-slate-800/30 p-4">
+            <h3 className="text-sm font-semibold text-slate-100">复核交接班功能使用说明</h3>
+            <div className="mt-3 space-y-3 text-[11px] text-slate-400">
+              <p className="leading-relaxed">
+                复核交接班用于质控人员之间将待处理异常整理成清单进行交接，确保异常处理链路完整可追溯。
+              </p>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">1. 创建交接清单：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>点击顶部「创建交接」按钮打开创建弹窗</li>
+                  <li>左侧按批次号、异常类型（超温/缺日志/未登记/复核冲突）、严重级别（警告/严重）、复核状态（未复核/放行/隔离/忽略）筛选异常</li>
+                  <li>勾选需要交接的异常条目，可点击箭头展开查看原始行号、原复核人、原备注等详情</li>
+                  <li>右侧填写交接标题、接收人（*必填）、截止时间（*必填）和交接备注</li>
+                  <li>每条交接条目会自动保存原始异常摘要、当前复核规则快照（阈值等）</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">2. 个人待办队列：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>「复核交接管理」面板默认展示「我的待办」：当前登录人作为接收人的所有待接收/处理中/被退回任务</li>
+                  <li>可切换「全部」查看所有交接，或「我创建的」查看自己发起的交接</li>
+                  <li>顶部按钮可一键导出筛选结果为 JSON/CSV，导出包含交接记录本身及所有异常条目的规则快照</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">3. 接收、退回和完成：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li><strong>接收：</strong>状态为「待接收」或「已退回」时，可点击「接收」进入处理</li>
+                  <li><strong>处理：</strong>接收后点击「处理」打开复核弹窗，逐条选择结论（放行/隔离/忽略）并填写备注</li>
+                  <li><strong>退回：</strong>如交接信息不完整或需要补充，可填写原因退回给交接人，任务回到「待接收」状态</li>
+                  <li><strong>完成：</strong>所有异常复核完毕后点击「提交完成」，系统将复核结论写入批次并自动生成审计日志</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">4. 多人同时处理冲突检测：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>点击编辑交接条目时系统自动加锁，锁定人显示在「锁定状态」列</li>
+                  <li>若另一位质控人员同时点击同一条目，会收到红色冲突提示：「该条目正在被 XX 处理」</li>
+                  <li>冲突事件会写入审计日志（操作类型：交接处理冲突），记录尝试人、被占用人、时间戳</li>
+                  <li>若强制提交，系统弹出二次确认并明确提示「可能覆盖他人结论」，不会静默覆盖</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">5. 持久化与刷新保留：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>交接记录（含状态流转历史、版本号）、条目锁定、筛选条件均已加入 localStorage 持久化（key: <code className="rounded bg-slate-900/60 px-1 py-0.5 font-mono text-sky-100">cold-chain-dashboard-v2</code>）</li>
+                  <li>刷新页面或重启浏览器后，交接状态、锁定状态、筛选条件全部保留</li>
+                  <li>交接详情中展示创建时间、接收时间、退回时间、完成时间等完整时间轴</li>
+                </ul>
+              </div>
+
+              <p className="leading-relaxed text-sky-300">
+                <strong>快速上手：</strong>先点击「加载样例数据」→ 点击「创建交接」→ 勾选几条异常 → 接收人填自己 → 创建 → 回到交接面板「我的待办」→「接收」→「处理」→ 选择结论 →「提交完成」，即可体验完整链路。
+              </p>
+            </div>
+          </div>
+
           <div className="h-8" />
         </div>
       </div>

@@ -19,6 +19,11 @@ const ALL_ACTIONS: AuditAction[] = [
   'export_data',
   'export_rules_package',
   'import_rules_package',
+  'create_handover',
+  'accept_handover',
+  'return_handover',
+  'complete_handover',
+  'handover_conflict',
 ];
 
 function fmtDateTime(iso: string): string {
@@ -41,6 +46,11 @@ const ACTION_COLOR: Record<AuditAction, string> = {
   export_data: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
   export_rules_package: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
   import_rules_package: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  create_handover: 'bg-lime-500/15 text-lime-300 border-lime-500/30',
+  accept_handover: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+  return_handover: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+  complete_handover: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  handover_conflict: 'bg-red-600/20 text-red-300 border-red-600/40',
 };
 
 const AuditLogPanel: FC = () => {

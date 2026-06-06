@@ -37,7 +37,12 @@ export type AuditAction =
   | 'clear_all'
   | 'export_data'
   | 'export_rules_package'
-  | 'import_rules_package';
+  | 'import_rules_package'
+  | 'create_handover'
+  | 'accept_handover'
+  | 'return_handover'
+  | 'complete_handover'
+  | 'handover_conflict';
 
 export interface AuditLog {
   id: string;
@@ -179,6 +184,67 @@ export type AuditLogFilter = {
   operator: string;
 };
 
+export interface RulesPackageApplyResult {
+  success: boolean;
+  message: string;
+  appliedRules?: ReviewRules;
+  beforeRules?: ReviewRules;
+}
+
+export type HandoverStatus = 'pending' | 'accepted' | 'returned' | 'completed';
+
+export interface HandoverItemSnapshot {
+  anomalyId: string;
+  batchId: string;
+  anomalyType: AnomalyType;
+  severity: AnomalySeverity;
+  description: string;
+  sourceRows: number[];
+  originalConclusion: ReviewConclusion;
+  originalReviewer?: string;
+  originalRemark?: string;
+  rulesSnapshot: ReviewRules;
+}
+
+export interface HandoverRecord {
+  id: string;
+  title: string;
+  items: HandoverItemSnapshot[];
+  handedBy: string;
+  receivedBy: string;
+  remark: string;
+  deadline: string;
+  status: HandoverStatus;
+  returnReason?: string;
+  completedRemark?: string;
+  createdAt: string;
+  acceptedAt?: string;
+  returnedAt?: string;
+  completedAt?: string;
+  lastUpdatedBy?: string;
+  lastUpdatedAt?: string;
+  version: number;
+}
+
+export interface HandoverLock {
+  handoverId: string;
+  itemAnomalyId: string;
+  lockedBy: string;
+  lockedAt: string;
+}
+
+export interface HandoverFilterState {
+  keyword: string;
+  statuses: HandoverStatus[];
+  handedBy: string;
+  receivedBy: string;
+}
+
+export interface RuleFieldRange {
+  min: number;
+  max: number;
+}
+
 export interface AppState {
   arrivalBatches: ArrivalBatch[];
   temperatureLogs: TemperatureLog[];
@@ -194,6 +260,10 @@ export interface AppState {
   filters: FilterState;
   auditLogFilter: AuditLogFilter;
   selectedBatchId: string | null;
+
+  handoverRecords: HandoverRecord[];
+  handoverLocks: HandoverLock[];
+  handoverFilter: HandoverFilterState;
 
   importArrivals: (file: File) => Promise<ImportResult>;
   importTemperatureLogs: (file: File) => Promise<ImportResult>;
@@ -216,11 +286,21 @@ export interface AppState {
   previewRulesPackage: (file: File) => Promise<RulesPackagePreviewResult>;
   applyRulesPackage: (confirmed: boolean) => RulesPackageApplyResult;
   clearRulesPackagePreview: () => void;
-}
 
-export interface RuleFieldRange {
-  min: number;
-  max: number;
+  createHandover: (params: {
+    title: string;
+    anomalyIds: string[];
+    receivedBy: string;
+    remark: string;
+    deadline: string;
+  }) => HandoverRecord | null;
+  acceptHandover: (handoverId: string) => { success: boolean; message: string };
+  returnHandover: (handoverId: string, reason: string) => { success: boolean; message: string };
+  completeHandover: (handoverId: string, remark: string, decisions: Array<{ batchId: string; conclusion: ReviewConclusion; remark: string }>) => { success: boolean; message: string };
+  setHandoverFilter: (filters: Partial<HandoverFilterState>) => void;
+  acquireItemLock: (handoverId: string, anomalyId: string) => { success: boolean; message: string; lockedBy?: string };
+  releaseItemLock: (handoverId: string, anomalyId: string) => void;
+  exportHandoverData: (format: 'json' | 'csv', handoverIds?: string[]) => void;
 }
 
 export const REVIEW_RULES_RANGES: Record<keyof ReviewRules, RuleFieldRange> = {
@@ -282,11 +362,4 @@ export interface RulesPackagePreviewResult {
   message: string;
   preview?: RulesPackagePreviewState;
   issues?: RuleValidationIssue[];
-}
-
-export interface RulesPackageApplyResult {
-  success: boolean;
-  message: string;
-  appliedRules?: ReviewRules;
-  beforeRules?: ReviewRules;
 }
