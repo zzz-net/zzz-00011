@@ -30,12 +30,18 @@ import type {
   SupplierRiskFilterState,
   SupplierRiskProfile,
   SupplierRiskLevelRule,
+  ReviewFilterState,
+  ReviewTemplate,
+  ReviewRecord,
+  ReviewNode,
 } from '@/types';
 import {
   DEFAULT_REVIEW_RULES,
   DEFAULT_SUPPLIER_RISK_RULES,
+  DEFAULT_REVIEW_TEMPLATES,
   FIELD_LABELS,
   PERSIST_STORAGE_KEY,
+  INITIAL_REVIEW_FILTER,
 } from '@/types';
 import {
   buildExportCsv,
@@ -72,6 +78,20 @@ import {
   saveSupplierNameResolution,
   saveSupplierRiskRules,
 } from '@/services/supplierRiskService';
+import {
+  applyReviewFilters,
+  buildReviewExportCsv,
+  buildReviewExportJson,
+  buildReviewRecord,
+  createReviewLog,
+  detectReviewConflicts,
+  getReviewMetrics,
+  loadReviewRecords,
+  loadReviewTemplates,
+  resolveConflict,
+  saveReviewRecords,
+  saveReviewTemplates,
+} from '@/services/reviewService';
 
 const initialFilters: FilterState = {
   batchId: '',
@@ -101,6 +121,8 @@ const initialSupplierRiskFilter: SupplierRiskFilterState = {
   onlyWithPendingHandovers: false,
   onlyWithNameConflicts: false,
 };
+
+const initialReviewFilter: ReviewFilterState = INITIAL_REVIEW_FILTER;
 
 function genAuditId(): string {
   return `audit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -163,6 +185,12 @@ export const useAppStore = create<AppState>()(
         supplierRiskRules: loadSupplierRiskRules(),
         supplierNameResolution: loadSupplierNameResolution(),
         supplierRiskFilter: initialSupplierRiskFilter,
+
+        reviewTemplates: loadReviewTemplates(),
+        reviewRecords: loadReviewRecords(),
+        reviewFilter: initialReviewFilter,
+        reviewUndoStack: [],
+        pendingReviewConflicts: [],
 
         previewFieldMapping: async (file: File, fileType: FileType): Promise<FieldMappingPreview> => {
           const preview = await buildFieldMappingPreview(file, fileType);
@@ -642,6 +670,8 @@ export const useAppStore = create<AppState>()(
         );
         saveSupplierRiskRules(DEFAULT_SUPPLIER_RISK_RULES);
         saveSupplierNameResolution({ variantToCanonical: {}, conflicts: [] });
+        saveReviewTemplates(JSON.parse(JSON.stringify(DEFAULT_REVIEW_TEMPLATES)));
+        saveReviewRecords([]);
         set({
           arrivalBatches: [],
           temperatureLogs: [],
@@ -659,6 +689,11 @@ export const useAppStore = create<AppState>()(
           supplierRiskRules: { ...DEFAULT_SUPPLIER_RISK_RULES },
           supplierNameResolution: { variantToCanonical: {}, conflicts: [] },
           supplierRiskFilter: initialSupplierRiskFilter,
+          reviewTemplates: JSON.parse(JSON.stringify(DEFAULT_REVIEW_TEMPLATES)),
+          reviewRecords: [],
+          reviewFilter: initialReviewFilter,
+          reviewUndoStack: [],
+          pendingReviewConflicts: [],
         });
       },
 
@@ -1162,6 +1197,303 @@ export const useAppStore = create<AppState>()(
           downloadFile(content, `supplier-risk-${ts}.json`, 'application/json');
         }
       },
+
+      setReviewFilter: (filters) =>
+        set((s) => ({ reviewFilter: { ...s.reviewFilter, ...filters } })),
+
+      saveReviewTemplate: (template) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const now = new Date().toISOString();
+        const existing = s.reviewTemplates.find((t) => t.id === template.id);
+        const toSave: ReviewTemplate = existing
+          ? { ...template, updatedAt: now }
+          : { ...template, createdAt: now, updatedAt: now };
+        const next = existing
+          ? s.reviewTemplates.map((t) => (t.id === template.id ? toSave : t))
+          : [...s.reviewTemplates, toSave];
+        set({ reviewTemplates: next });
+        saveReviewTemplates(next);
+        appendAudit(
+          createAuditLog(
+            'review_template_update',
+            reviewer,
+            existing ? `更新复盘模板：${template.name}` : `创建复盘模板：${template.name}`,
+            { templateId: template.id, templateName: template.name },
+          ),
+        );
+      },
+
+      deleteReviewTemplate: (templateId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const tpl = s.reviewTemplates.find((t) => t.id === templateId);
+        if (!tpl) return;
+        if (tpl.id === 'tpl-default') return;
+        const next = s.reviewTemplates.filter((t) => t.id !== templateId);
+        set({ reviewTemplates: next });
+        saveReviewTemplates(next);
+        appendAudit(
+          createAuditLog(
+            'review_template_update',
+            reviewer,
+            `删除复盘模板：${tpl.name}`,
+            { templateId, templateName: tpl.name },
+          ),
+        );
+      },
+
+      createReview: (params) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        if (params.batchIds.length === 0) return null;
+        const template =
+          s.reviewTemplates.find((t) => t.id === params.templateId) ||
+          s.reviewTemplates[0] ||
+          DEFAULT_REVIEW_TEMPLATES[0];
+        const record = buildReviewRecord({
+          title: params.title,
+          batchIds: params.batchIds,
+          batches: s.arrivalBatches,
+          logs: s.temperatureLogs,
+          anomalies: s.anomalies,
+          reviews: s.manualReviews,
+          decisions: s.reviewDecisions,
+          handovers: s.handoverRecords,
+          supplierProfiles: s.computeSupplierRiskProfiles(),
+          template,
+          createdBy: reviewer,
+          filtersSnapshot: s.filters as unknown as Record<string, unknown>,
+          initialSeverity: params.initialSeverity,
+        });
+        const conflicts = detectReviewConflicts(record, s.reviewRecords);
+        set((st) => ({
+          reviewRecords: [record, ...st.reviewRecords],
+          pendingReviewConflicts: conflicts,
+        }));
+        saveReviewRecords([record, ...s.reviewRecords]);
+        appendAudit(
+          createAuditLog(
+            'review_create',
+            reviewer,
+            `创建复盘单 ${record.id}：${record.title}，批次 ${params.batchIds.join(', ')}`,
+            { reviewId: record.id, batchIds: params.batchIds, templateId: template.id },
+          ),
+        );
+        return record;
+      },
+
+      updateReviewNode: (reviewId, nodeId, patch) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const record = s.reviewRecords.find((r) => r.id === reviewId);
+        if (!record) return;
+        const node = record.nodes.find((n) => n.id === nodeId);
+        if (!node) return;
+
+        const snapshot = {
+          reviewId,
+          previousNodes: JSON.parse(JSON.stringify(record.nodes)),
+          previousLogs: JSON.parse(JSON.stringify(record.logs)),
+        };
+
+        const now = new Date().toISOString();
+        const updatedNode: ReviewNode = { ...node, ...patch, updatedAt: now };
+        const changedFields: string[] = [];
+        for (const k of Object.keys(patch) as Array<keyof ReviewNode>) {
+          if (JSON.stringify(node[k]) !== JSON.stringify(patch[k])) {
+            changedFields.push(k);
+          }
+        }
+
+        const logEntry = createReviewLog(
+          'node_update',
+          reviewer,
+          `编辑节点 ${node.title}（${node.nodeType}），变更字段：${changedFields.join(', ') || '无'}`,
+          { nodeId, nodeType: node.nodeType, changedFields },
+        );
+
+        const updated: ReviewRecord = {
+          ...record,
+          nodes: record.nodes.map((n) => (n.id === nodeId ? updatedNode : n)),
+          logs: [...record.logs, logEntry],
+          updatedAt: now,
+        };
+
+        set((st) => ({
+          reviewRecords: st.reviewRecords.map((r) => (r.id === reviewId ? updated : r)),
+          reviewUndoStack: [...st.reviewUndoStack.slice(-19), snapshot],
+        }));
+        saveReviewRecords(s.reviewRecords.map((r) => (r.id === reviewId ? updated : r)));
+        appendAudit(
+          createAuditLog(
+            'review_node_edit',
+            reviewer,
+            `复盘单 ${reviewId} 节点编辑：${node.title}`,
+            { reviewId, nodeId, nodeType: node.nodeType, changedFields },
+          ),
+        );
+      },
+
+      undoLastReviewNodeEdit: (reviewId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const stack = s.reviewUndoStack.filter((u) => u.reviewId === reviewId);
+        if (stack.length === 0) {
+          return { success: false, message: '没有可撤销的编辑' };
+        }
+        const last = stack[stack.length - 1];
+        const record = s.reviewRecords.find((r) => r.id === reviewId);
+        if (!record) return { success: false, message: '复盘单不存在' };
+
+        const logEntry = createReviewLog(
+          'node_update',
+          reviewer,
+          `撤销节点编辑，恢复到上一版本`,
+          {},
+        );
+
+        const restored: ReviewRecord = {
+          ...record,
+          nodes: last.previousNodes,
+          logs: [...last.previousLogs, logEntry],
+          updatedAt: new Date().toISOString(),
+        };
+
+        set((st) => ({
+          reviewRecords: st.reviewRecords.map((r) => (r.id === reviewId ? restored : r)),
+          reviewUndoStack: st.reviewUndoStack.slice(0, -1),
+        }));
+        saveReviewRecords(s.reviewRecords.map((r) => (r.id === reviewId ? restored : r)));
+        appendAudit(
+          createAuditLog(
+            'review_node_undo',
+            reviewer,
+            `复盘单 ${reviewId} 撤销节点编辑`,
+            { reviewId },
+          ),
+        );
+        return { success: true, message: '已撤销最近一次节点编辑' };
+      },
+
+      setReviewStatus: (reviewId, status) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const record = s.reviewRecords.find((r) => r.id === reviewId);
+        if (!record) return;
+        const now = new Date().toISOString();
+        const logEntry = createReviewLog(
+          'review_status_change',
+          reviewer,
+          `状态变更：${record.status} → ${status}`,
+          { fromStatus: record.status, toStatus: status },
+        );
+        const updated: ReviewRecord = {
+          ...record,
+          status,
+          logs: [...record.logs, logEntry],
+          updatedAt: now,
+          completedAt: status === 'completed' ? now : record.completedAt,
+        };
+        set((st) => ({
+          reviewRecords: st.reviewRecords.map((r) => (r.id === reviewId ? updated : r)),
+        }));
+        saveReviewRecords(s.reviewRecords.map((r) => (r.id === reviewId ? updated : r)));
+        appendAudit(
+          createAuditLog(
+            'review_status_change',
+            reviewer,
+            `复盘单 ${reviewId} 状态变更：${record.status} → ${status}`,
+            { reviewId, fromStatus: record.status, toStatus: status },
+          ),
+        );
+      },
+
+      deleteReview: (reviewId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const record = s.reviewRecords.find((r) => r.id === reviewId);
+        if (!record) return;
+        const next = s.reviewRecords.filter((r) => r.id !== reviewId);
+        set({ reviewRecords: next });
+        saveReviewRecords(next);
+        appendAudit(
+          createAuditLog(
+            'review_update',
+            reviewer,
+            `删除复盘单 ${reviewId}：${record.title}`,
+            { reviewId, title: record.title },
+          ),
+        );
+      },
+
+      resolvePendingReviewConflict: (conflictId, optionKey, targetReviewId) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const conflict = s.pendingReviewConflicts.find((c) => c.id === conflictId);
+        if (!conflict) return;
+        const target = s.reviewRecords.find((r) => r.id === targetReviewId);
+        if (!target) return;
+
+        const { allRecords } = resolveConflict(
+          target,
+          conflict,
+          optionKey,
+          reviewer,
+          s.reviewRecords,
+          s.reviewTemplates,
+        );
+
+        set((st) => ({
+          reviewRecords: allRecords,
+          pendingReviewConflicts: st.pendingReviewConflicts.filter((c) => c.id !== conflictId),
+        }));
+        saveReviewRecords(allRecords);
+        appendAudit(
+          createAuditLog(
+            'review_conflict_resolved',
+            reviewer,
+            `复盘冲突处理：${conflict.type} → ${optionKey}`,
+            { conflictId, conflictType: conflict.type, option: optionKey, reviewId: targetReviewId },
+          ),
+        );
+      },
+
+      clearPendingReviewConflicts: () => set({ pendingReviewConflicts: [] }),
+
+      exportReviewData: (format, reviewIds) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        let records = s.reviewRecords;
+        if (reviewIds && reviewIds.length > 0) {
+          records = records.filter((r) => reviewIds.includes(r.id));
+        } else {
+          records = applyReviewFilters(records, s.reviewFilter);
+        }
+        const exportTime = new Date().toISOString();
+        const ts = exportTime.replace(/[:.]/g, '-').slice(0, 19);
+        const ctx = {
+          filterSnapshot: s.reviewFilter,
+          templatesSnapshot: s.reviewTemplates,
+          exportedAt: exportTime,
+          exportedBy: reviewer,
+        };
+        appendAudit(
+          createAuditLog(
+            'review_export',
+            reviewer,
+            `导出复盘数据：${format.toUpperCase()}，共 ${records.length} 条复盘单`,
+            { format, reviewCount: records.length, reviewIds: reviewIds ?? null },
+          ),
+        );
+        if (format === 'csv') {
+          const content = buildReviewExportCsv(records, ctx);
+          downloadFile(content, `review-workbench-${ts}.csv`, 'text/csv;charset=utf-8');
+        } else {
+          const content = buildReviewExportJson(records, ctx);
+          downloadFile(content, `review-workbench-${ts}.json`, 'application/json');
+        }
+      },
     });
   },
   {
@@ -1184,6 +1516,8 @@ export const useAppStore = create<AppState>()(
         handoverLocks: state.handoverLocks,
         handoverFilter: state.handoverFilter,
         supplierRiskFilter: state.supplierRiskFilter,
+        reviewFilter: state.reviewFilter,
+        reviewUndoStack: state.reviewUndoStack,
       }),
     },
   ),
@@ -1306,3 +1640,5 @@ export function getHandoverMetrics(
     createdByMe,
   };
 }
+
+export { applyReviewFilters, getReviewMetrics };

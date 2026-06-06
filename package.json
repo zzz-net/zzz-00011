@@ -10,6 +10,7 @@
     "check:persist-key": "node scripts/check-persist-key.mjs",
     "test:field-mapping": "node scripts/test-field-mapping.mjs",
     "test:supplier-risk": "node scripts/test-supplier-risk.mjs",
+    "test:review-workbench": "node scripts/test-review-workbench.mjs",
     "preview": "vite preview",
     "check": "tsc -b --noEmit"
   },

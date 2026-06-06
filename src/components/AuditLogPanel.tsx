@@ -30,6 +30,15 @@ const ALL_ACTIONS: AuditAction[] = [
   'supplier_name_merge_confirmed',
   'supplier_name_merge_kept_separate',
   'export_supplier_risk',
+  'review_create',
+  'review_update',
+  'review_status_change',
+  'review_node_edit',
+  'review_node_undo',
+  'review_conflict_resolved',
+  'review_merge',
+  'review_export',
+  'review_template_update',
 ];
 
 function fmtDateTime(iso: string): string {
@@ -63,6 +72,15 @@ const ACTION_COLOR: Record<AuditAction, string> = {
   supplier_name_merge_confirmed: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
   supplier_name_merge_kept_separate: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
   export_supplier_risk: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
+  review_create: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  review_update: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+  review_status_change: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  review_node_edit: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  review_node_undo: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
+  review_conflict_resolved: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+  review_merge: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/30',
+  review_export: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  review_template_update: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
 };
 
 const AuditLogPanel: FC = () => {

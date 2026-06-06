@@ -1,6 +1,7 @@
-import { Snowflake, User, HelpCircle, RotateCcw, DatabaseZap, ClipboardList } from 'lucide-react';
-import { useAppStore, getHandoverMetrics } from '@/store';
+import { Snowflake, User, HelpCircle, RotateCcw, DatabaseZap, ClipboardList, FileSearch } from 'lucide-react';
+import { useAppStore, getHandoverMetrics, getReviewMetrics } from '@/store';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { FC } from 'react';
 
 interface HeaderProps {
@@ -9,8 +10,9 @@ interface HeaderProps {
 }
 
 const Header: FC<HeaderProps> = ({ onOpenHelp, onCreateHandover }) => {
-  const { currentReviewer, setCurrentReviewer, loadSampleData, clearAll, arrivalBatches, handoverRecords } = useAppStore();
+  const { currentReviewer, setCurrentReviewer, loadSampleData, clearAll, arrivalBatches, handoverRecords, reviewRecords, pendingReviewConflicts } = useAppStore();
   const metrics = getHandoverMetrics(handoverRecords, currentReviewer);
+  const reviewMetrics = getReviewMetrics(reviewRecords);
   const [editing, setEditing] = useState(!currentReviewer);
   const [name, setName] = useState(currentReviewer);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -52,6 +54,24 @@ const Header: FC<HeaderProps> = ({ onOpenHelp, onCreateHandover }) => {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link
+            to="/review"
+            className="group relative flex items-center gap-2 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-1.5 text-sm text-violet-300 transition hover:border-violet-400/60 hover:bg-violet-500/20"
+          >
+            <FileSearch className="h-4 w-4 transition group-hover:scale-110" />
+            <span>复盘工作台</span>
+            {reviewMetrics.total > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-violet-500 px-1 text-[9px] font-bold text-white">
+                {reviewMetrics.total}
+              </span>
+            )}
+            {pendingReviewConflicts.length > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-bold text-white">
+                {pendingReviewConflicts.length}!
+              </span>
+            )}
+          </Link>
+
           <button
             onClick={onCreateHandover}
             className="group relative flex items-center gap-2 rounded-md border border-lime-500/30 bg-lime-500/10 px-3 py-1.5 text-sm text-lime-300 transition hover:border-lime-400/60 hover:bg-lime-500/20"

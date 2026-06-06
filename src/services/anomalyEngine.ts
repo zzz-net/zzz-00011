@@ -378,6 +378,15 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   supplier_name_merge_confirmed: '供应商名称合并',
   supplier_name_merge_kept_separate: '供应商名称保留独立',
   export_supplier_risk: '导出供应商风险画像',
+  review_create: '创建复盘单',
+  review_update: '更新复盘单',
+  review_status_change: '复盘状态变更',
+  review_node_edit: '复盘节点编辑',
+  review_node_undo: '复盘节点撤销',
+  review_conflict_resolved: '复盘冲突处理',
+  review_merge: '复盘单合并',
+  review_export: '导出复盘数据',
+  review_template_update: '复盘模板更新',
 };
 
 export const HANDOVER_STATUS_LABEL: Record<string, string> = {

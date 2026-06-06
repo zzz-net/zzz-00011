@@ -48,7 +48,16 @@ export type AuditAction =
   | 'change_supplier_risk_rules'
   | 'supplier_name_merge_confirmed'
   | 'supplier_name_merge_kept_separate'
-  | 'export_supplier_risk';
+  | 'export_supplier_risk'
+  | 'review_create'
+  | 'review_update'
+  | 'review_status_change'
+  | 'review_node_edit'
+  | 'review_node_undo'
+  | 'review_conflict_resolved'
+  | 'review_merge'
+  | 'review_export'
+  | 'review_template_update';
 
 export interface AuditLog {
   id: string;
@@ -275,6 +284,12 @@ export interface AppState {
   supplierNameResolution: SupplierNameResolutionMap;
   supplierRiskFilter: SupplierRiskFilterState;
 
+  reviewTemplates: ReviewTemplate[];
+  reviewRecords: ReviewRecord[];
+  reviewFilter: ReviewFilterState;
+  reviewUndoStack: Array<{ reviewId: string; previousNodes: ReviewNode[]; previousLogs: ReviewLogEntry[] }>;
+  pendingReviewConflicts: ReviewConflict[];
+
   importArrivals: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
   importTemperatureLogs: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
   importManualReviews: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
@@ -319,6 +334,18 @@ export interface AppState {
   setSupplierRiskFilter: (filters: Partial<SupplierRiskFilterState>) => void;
   resolveSupplierNameConflict: (conflictId: string, merge: boolean, canonicalName?: string) => void;
   exportSupplierRiskData: (format: 'json' | 'csv', profiles?: SupplierRiskProfile[]) => void;
+
+  setReviewFilter: (filters: Partial<ReviewFilterState>) => void;
+  saveReviewTemplate: (template: ReviewTemplate) => void;
+  deleteReviewTemplate: (templateId: string) => void;
+  createReview: (params: { batchIds: string[]; templateId?: string; title?: string; initialSeverity?: ReviewSeverityLevel }) => ReviewRecord | null;
+  updateReviewNode: (reviewId: string, nodeId: string, patch: Partial<ReviewNode>) => void;
+  undoLastReviewNodeEdit: (reviewId: string) => { success: boolean; message: string };
+  setReviewStatus: (reviewId: string, status: ReviewStatus) => void;
+  deleteReview: (reviewId: string) => void;
+  resolvePendingReviewConflict: (conflictId: string, optionKey: string, targetReviewId: string) => void;
+  clearPendingReviewConflicts: () => void;
+  exportReviewData: (format: 'json' | 'csv', reviewIds?: string[]) => void;
 }
 
 export const REVIEW_RULES_RANGES: Record<keyof ReviewRules, RuleFieldRange> = {
@@ -638,4 +665,222 @@ export const FIELD_ALIASES: Record<FileType, Record<string, string[]>> = {
     remark: ['remark', '备注', '说明', 'Remark', 'REMARK'],
     reviewTime: ['reviewTime', 'review_time', 'review time', '复核时间', '审核时间', 'Review Time', 'REVIEW_TIME'],
   },
+};
+
+export const REVIEW_TEMPLATE_STORAGE_KEY = 'cold-chain-review-templates-v1';
+export const REVIEW_RECORDS_STORAGE_KEY = 'cold-chain-review-records-v1';
+
+export type ReviewSeverityLevel = 'minor' | 'moderate' | 'major' | 'critical';
+
+export const REVIEW_SEVERITY_LABEL: Record<ReviewSeverityLevel, string> = {
+  minor: '一般',
+  moderate: '较重',
+  major: '严重',
+  critical: '重大',
+};
+
+export const REVIEW_SEVERITY_COLOR: Record<ReviewSeverityLevel, string> = {
+  minor: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+  moderate: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+  major: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+  critical: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+};
+
+export type ReviewNodeType =
+  | 'arrival'
+  | 'temperature'
+  | 'anomaly_detect'
+  | 'manual_review'
+  | 'handover'
+  | 'supplier_risk'
+  | 'disposition';
+
+export const REVIEW_NODE_TYPE_LABEL: Record<ReviewNodeType, string> = {
+  arrival: '到货登记',
+  temperature: '温度监控',
+  anomaly_detect: '异常命中',
+  manual_review: '人工复核',
+  handover: '交接流转',
+  supplier_risk: '供应商画像',
+  disposition: '处置结论',
+};
+
+export const REVIEW_NODE_TYPE_COLOR: Record<ReviewNodeType, string> = {
+  arrival: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40',
+  temperature: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+  anomaly_detect: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+  manual_review: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
+  handover: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+  supplier_risk: 'bg-pink-500/20 text-pink-300 border-pink-500/40',
+  disposition: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+};
+
+export interface ReviewNodeEvidence {
+  description?: string;
+  fileName?: string;
+  dataType?: string;
+  batchId?: string;
+  sourceRowNumbers?: number[];
+  rawValue?: string | number;
+  sourceFile?: string;
+  sourceRows?: number[];
+  rawData?: Record<string, unknown>;
+}
+
+export interface ReviewNode {
+  id: string;
+  nodeType: ReviewNodeType;
+  title: string;
+  timestamp: string;
+  description: string;
+  severity?: ReviewSeverityLevel;
+  responsible?: string;
+  ruleHits: string[];
+  evidences: ReviewNodeEvidence[];
+  remark?: string;
+  attachmentName?: string;
+  attachmentNames?: string[];
+  conclusion?: string;
+  required?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewTemplateNodeConfig {
+  nodeType: ReviewNodeType;
+  required: boolean;
+  defaultResponsible?: string;
+}
+
+export interface ReviewTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  defaultSeverity: ReviewSeverityLevel;
+  nodes: ReviewTemplateNodeConfig[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const DEFAULT_REVIEW_TEMPLATES: ReviewTemplate[] = [
+  {
+    id: 'tpl-default',
+    name: '标准复盘模板',
+    description: '覆盖到货、温度、异常、复核、交接、处置的完整复盘链路',
+    defaultSeverity: 'moderate',
+    nodes: [
+      { nodeType: 'arrival', required: true, defaultResponsible: '仓储组' },
+      { nodeType: 'temperature', required: true, defaultResponsible: '冷链运输' },
+      { nodeType: 'anomaly_detect', required: true, defaultResponsible: '质控员' },
+      { nodeType: 'manual_review', required: false, defaultResponsible: '质控主管' },
+      { nodeType: 'handover', required: false, defaultResponsible: '' },
+      { nodeType: 'supplier_risk', required: false, defaultResponsible: '供应商管理' },
+      { nodeType: 'disposition', required: true, defaultResponsible: '质量负责人' },
+    ],
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  },
+];
+
+export type ReviewStatus = 'draft' | 'in_progress' | 'completed' | 'archived';
+
+export const REVIEW_STATUS_LABEL: Record<ReviewStatus, string> = {
+  draft: '草稿',
+  in_progress: '复盘中',
+  completed: '已完成',
+  archived: '已归档',
+};
+
+export const REVIEW_STATUS_COLOR: Record<ReviewStatus, string> = {
+  draft: 'bg-slate-500/20 text-slate-300 border-slate-500/40',
+  in_progress: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+  completed: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+  archived: 'bg-zinc-500/20 text-zinc-300 border-zinc-500/40',
+};
+
+export type ReviewConflictType = 'multi_ref' | 'empty_owner' | 'conclusion_conflict';
+
+export interface ReviewConflict {
+  id: string;
+  type: ReviewConflictType;
+  severity: 'warning' | 'danger';
+  title: string;
+  description: string;
+  relatedBatchIds: string[];
+  relatedReviewIds: string[];
+  options: ReviewConflictOption[];
+}
+
+export interface ReviewConflictOption {
+  key: string;
+  label: string;
+  description?: string;
+  isRecommended?: boolean;
+}
+
+export interface ReviewRecord {
+  id: string;
+  title: string;
+  severity: ReviewSeverityLevel;
+  status: ReviewStatus;
+  batchIds: string[];
+  supplierName?: string;
+  templateId: string;
+  templateSnapshot: ReviewTemplate;
+  nodes: ReviewNode[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  filtersSnapshot?: Record<string, unknown>;
+  logs: ReviewLogEntry[];
+}
+
+export type ReviewLogAction =
+  | 'review_create'
+  | 'review_update'
+  | 'node_create'
+  | 'node_update'
+  | 'node_delete'
+  | 'review_status_change'
+  | 'conflict_resolved'
+  | 'review_merge'
+  | 'review_export';
+
+export interface ReviewLogEntry {
+  id: string;
+  action: ReviewLogAction;
+  operator: string;
+  timestamp: string;
+  summary?: string;
+  details: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReviewUndoState {
+  type: 'node_edit' | 'merge';
+  snapshot: unknown;
+  timestamp: string;
+}
+
+export interface ReviewFilterState {
+  keyword: string;
+  severities: ReviewSeverityLevel[];
+  statuses: ReviewStatus[];
+  batchId: string;
+  supplierName: string;
+  createdBy: string;
+  startDate: string;
+  endDate: string;
+}
+
+export const INITIAL_REVIEW_FILTER: ReviewFilterState = {
+  keyword: '',
+  severities: [],
+  statuses: [],
+  batchId: '',
+  supplierName: '',
+  createdBy: '',
+  startDate: '',
+  endDate: '',
 };
