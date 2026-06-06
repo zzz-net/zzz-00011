@@ -18,6 +18,9 @@ import type {
   FieldMappingPreview,
   ColumnMappingSnapshot,
   SavedFieldMappings,
+  MappingHealthReport,
+  MappingHealthIssue,
+  FileTypeMappingsWithHeaders,
 } from '@/types';
 import { FIELD_ALIASES, FIELD_LABELS } from '@/types';
 import { AUDIT_ACTION_LABEL, HANDOVER_STATUS_LABEL, ANOMALY_TYPE_LABEL, CONCLUSION_LABEL } from '@/services/anomalyEngine';
@@ -133,11 +136,16 @@ export function applyMappingToRow(
   return result;
 }
 
-export function saveFieldMappings(fileType: FileType, mappings: ColumnMappingSnapshot[]): void {
+export function saveFieldMappings(fileType: FileType, mappings: ColumnMappingSnapshot[], headers: string[]): void {
   try {
     const raw = localStorage.getItem(FIELD_MAPPING_STORAGE_KEY);
     const saved: SavedFieldMappings = raw ? JSON.parse(raw) : {};
-    saved[fileType] = mappings;
+    const entry: FileTypeMappingsWithHeaders = {
+      mappings,
+      headers,
+      savedAt: new Date().toISOString(),
+    };
+    saved[fileType] = entry;
     saved.updatedAt = new Date().toISOString();
     localStorage.setItem(FIELD_MAPPING_STORAGE_KEY, JSON.stringify(saved));
   } catch {
@@ -148,13 +156,32 @@ export function saveFieldMappings(fileType: FileType, mappings: ColumnMappingSna
 export function loadFieldMappings(): SavedFieldMappings {
   try {
     const raw = localStorage.getItem(FIELD_MAPPING_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    const normalized: SavedFieldMappings = {};
+    for (const key of Object.keys(parsed)) {
+      if (key === 'updatedAt') {
+        normalized.updatedAt = parsed.updatedAt;
+        continue;
+      }
+      const val = parsed[key];
+      if (Array.isArray(val)) {
+        normalized[key as FileType] = {
+          mappings: val,
+          headers: [],
+          savedAt: parsed.updatedAt || new Date().toISOString(),
+        };
+      } else if (val && typeof val === 'object' && 'mappings' in val) {
+        normalized[key as FileType] = val as FileTypeMappingsWithHeaders;
+      }
+    }
+    return normalized;
   } catch {
     return {};
   }
 }
 
-export function getSavedMappingForType(fileType: FileType): ColumnMappingSnapshot[] | undefined {
+export function getSavedMappingForType(fileType: FileType): FileTypeMappingsWithHeaders | undefined {
   return loadFieldMappings()[fileType];
 }
 
@@ -163,17 +190,118 @@ export function checkSavedMappingOutdated(
   headers: string[],
 ): { outdated: boolean; outdatedFields: string[] } {
   const saved = getSavedMappingForType(fileType);
-  if (!saved || saved.length === 0) {
+  if (!saved || !saved.mappings || saved.mappings.length === 0) {
     return { outdated: false, outdatedFields: [] };
   }
   const headerSet = new Set(headers);
   const outdatedFields: string[] = [];
-  for (const sm of saved) {
+  for (const sm of saved.mappings) {
     if (sm.sourceColumn && !headerSet.has(sm.sourceColumn)) {
       outdatedFields.push(sm.targetField);
     }
   }
   return { outdated: outdatedFields.length > 0, outdatedFields };
+}
+
+export function checkMappingHealth(
+  fileType: FileType,
+  headers: string[],
+  mappings: FieldMapping[],
+): MappingHealthReport {
+  const saved = getSavedMappingForType(fileType);
+  const labels = FIELD_LABELS[fileType];
+  const issues: MappingHealthIssue[] = [];
+
+  const savedMappings = saved?.mappings || [];
+  const savedHeaders = saved?.headers || [];
+
+  const headerSet = new Set(headers);
+  const normalizedSavedHeaders = new Set(savedHeaders.map(normalizeHeader));
+
+  const invalidatedSourceColumns: Array<{ targetField: string; savedSourceColumn: string }> = [];
+  for (const sm of savedMappings) {
+    if (sm.sourceColumn && !headerSet.has(sm.sourceColumn)) {
+      invalidatedSourceColumns.push({
+        targetField: sm.targetField,
+        savedSourceColumn: sm.sourceColumn,
+      });
+      issues.push({
+        type: 'source_column_invalidated',
+        severity: 'warning',
+        targetField: sm.targetField,
+        sourceColumn: sm.sourceColumn,
+        message: `字段 "${labels[sm.targetField] || sm.targetField}" 保存的源列 "${sm.sourceColumn}" 在当前 CSV 中不存在，已失效`,
+      });
+    }
+  }
+
+  const newColumns: string[] = [];
+  for (const h of headers) {
+    if (savedHeaders.length > 0 && !normalizedSavedHeaders.has(normalizeHeader(h))) {
+      newColumns.push(h);
+      issues.push({
+        type: 'new_column_detected',
+        severity: 'info',
+        sourceColumn: h,
+        message: `检测到新增列 "${h}"，请确认是否需要映射到目标字段`,
+      });
+    }
+  }
+
+  const missingRequiredFields: string[] = [];
+  for (const m of mappings) {
+    if (m.isRequired && !m.sourceColumn) {
+      missingRequiredFields.push(m.targetField);
+      issues.push({
+        type: 'missing_required',
+        severity: 'error',
+        targetField: m.targetField,
+        message: `必填字段 "${labels[m.targetField] || m.targetField}" 未映射，将阻断导入`,
+      });
+    }
+  }
+
+  const conflictingSourceColumns: Array<{ sourceColumn: string; targetFields: string[] }> = [];
+  const colUsage = new Map<string, string[]>();
+  for (const m of mappings) {
+    if (!m.sourceColumn) continue;
+    if (!colUsage.has(m.sourceColumn)) colUsage.set(m.sourceColumn, []);
+    colUsage.get(m.sourceColumn)!.push(m.targetField);
+  }
+  for (const [col, fields] of colUsage.entries()) {
+    if (fields.length > 1) {
+      conflictingSourceColumns.push({ sourceColumn: col, targetFields: fields });
+      issues.push({
+        type: 'source_column_conflict',
+        severity: 'error',
+        sourceColumn: col,
+        message: `源列 "${col}" 被同时映射到 ${fields.map((f) => `"${labels[f] || f}"`).join('、')}，存在冲突`,
+      });
+    }
+  }
+
+  const savedMappingApplied = savedMappings.length > 0;
+  if (savedMappingApplied && invalidatedSourceColumns.length === 0) {
+    issues.unshift({
+      type: 'saved_mapping_applied',
+      severity: 'info',
+      message: `已沿用本地保存的映射配置（保存于 ${saved?.savedAt ? new Date(saved.savedAt).toLocaleString('zh-CN') : '未知时间'}）`,
+    });
+  }
+
+  const hasErrors = issues.some((i) => i.severity === 'error');
+  const hasWarnings = issues.some((i) => i.severity === 'warning');
+
+  return {
+    savedMappingApplied,
+    invalidatedSourceColumns,
+    newColumns,
+    missingRequiredFields,
+    conflictingSourceColumns,
+    issues,
+    isHealthy: !hasErrors,
+    needsUserAttention: hasErrors || hasWarnings || newColumns.length > 0 || invalidatedSourceColumns.length > 0,
+  };
 }
 
 export function applySavedMappings(
@@ -182,18 +310,18 @@ export function applySavedMappings(
   headers: string[],
 ): { mappings: FieldMapping[]; applied: boolean } {
   const saved = getSavedMappingForType(fileType);
-  if (!saved || saved.length === 0) {
+  if (!saved || !saved.mappings || saved.mappings.length === 0) {
     return { mappings: autoMappings, applied: false };
   }
   const headerSet = new Set(headers);
   const merged = autoMappings.map((am) => {
-    const sm = saved.find((s) => s.targetField === am.targetField);
+    const sm = saved.mappings.find((s) => s.targetField === am.targetField);
     if (sm && sm.sourceColumn && headerSet.has(sm.sourceColumn)) {
       return {
         ...am,
         sourceColumn: sm.sourceColumn,
         matchedAutomatically: false,
-        matchReason: '已应用本地保存的映射配置',
+        matchReason: '已沿用本地保存的映射配置',
       };
     }
     return am;
@@ -214,6 +342,7 @@ export async function buildFieldMappingPreview(
   const savedMapping = getSavedMappingForType(fileType);
   const { outdated, outdatedFields } = checkSavedMappingOutdated(fileType, headers);
   const validation = validateMappings(applied);
+  const healthReport = checkMappingHealth(fileType, headers, applied);
   const mappingSnapshot: ColumnMappingSnapshot[] = applied.map((m) => ({
     targetField: m.targetField,
     sourceColumn: m.sourceColumn,
@@ -230,6 +359,7 @@ export async function buildFieldMappingPreview(
     savedMappingOutdated: outdated,
     outdatedFields,
     mappingSnapshot,
+    healthReport,
   };
 }
 

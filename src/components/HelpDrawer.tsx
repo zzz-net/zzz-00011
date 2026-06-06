@@ -276,10 +276,10 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
           </div>
 
           <div className="mt-6 rounded-lg border border-purple-500/30 bg-purple-500/5 p-4">
-            <h3 className="text-sm font-semibold text-slate-100">字段映射预览功能说明</h3>
+            <h3 className="text-sm font-semibold text-slate-100">字段映射预览与健康检查</h3>
             <div className="mt-3 space-y-3 text-[11px] text-slate-400">
               <p className="leading-relaxed">
-                导入到货清单、温度日志、人工复核记录前，系统会先弹出「字段映射预览」面板，支持中文表头、大小写和空格差异自动识别，无需手动修改 CSV 文件。
+                导入到货清单、温度日志、人工复核记录前，系统会先弹出「字段映射预览」面板并执行<strong className="text-purple-200">映射健康检查</strong>。面板顶部会显示映射健康状态徽章：<span className="text-emerald-300">映射健康</span> / <span className="text-amber-300">需关注</span> / <span className="text-red-300">存在阻断问题</span>。
               </p>
 
               <div>
@@ -293,20 +293,32 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
               </div>
 
               <div>
-                <p className="mb-1 font-medium text-slate-300">2. 手动选列：</p>
+                <p className="mb-1 font-medium text-slate-300">2. 映射健康检查（预览层阻断）：</p>
                 <ul className="ml-4 list-disc space-y-0.5">
-                  <li>自动匹配结果可在下拉菜单中手动修改或清空</li>
-                  <li>未匹配的字段显示黄色警告，必填字段缺失会阻断导入</li>
-                  <li>可点击「自动匹配」按钮重新根据当前表头执行匹配</li>
+                  <li><strong className="text-emerald-300">沿用本地映射：</strong>检测到已保存的映射且全部有效时，自动沿用并显示信息提示</li>
+                  <li><strong className="text-amber-300">源列失效：</strong>保存的映射所指向的 CSV 列在当前文件中不存在，以黄色警告列出，<strong className="text-amber-200">不会静默套用旧映射</strong></li>
+                  <li><strong className="text-sky-300">新增列：</strong>当前 CSV 出现保存时未有的列，以蓝色信息提示，质控员需确认是否映射到目标字段</li>
+                  <li><strong className="text-red-300">必填缺失：</strong>必填字段未映射到任何列，红色错误，阻断导入</li>
+                  <li><strong className="text-orange-300">同源冲突：</strong>同一 CSV 列被同时映射到多个目标字段，橙色错误，阻断导入</li>
+                </ul>
+              </div>
+
+              <div className="rounded-md border border-violet-500/30 bg-violet-500/5 p-2.5">
+                <p className="mb-1 font-medium text-violet-200">⚠️ 阻断保护机制：</p>
+                <ul className="ml-4 list-disc space-y-0.5 text-violet-200/90">
+                  <li>当存在源列失效或新增列（仅警告、无阻断错误）时，导入按钮变为紫色，需<strong>勾选「我已确认映射状态」</strong>复选框后才能继续</li>
+                  <li>当存在必填缺失或同源冲突（阻断错误）时，「确认导入」按钮完全禁用，必须先修复</li>
+                  <li>系统<strong>永远不会</strong>静默使用已失效的旧映射，所有异常状态必须由质控员显式处理</li>
                 </ul>
               </div>
 
               <div>
-                <p className="mb-1 font-medium text-slate-300">3. 校验规则：</p>
+                <p className="mb-1 font-medium text-slate-300">3. 手动选列：</p>
                 <ul className="ml-4 list-disc space-y-0.5">
-                  <li>必填字段缺失：红色背景 + 具体说明，「确认导入」按钮禁用</li>
-                  <li>列映射冲突：同一 CSV 列映射到多个目标字段时，橙色警告行提示，「确认导入」按钮禁用，不静默覆盖</li>
-                  <li>非必填字段缺失：黄色提示，不阻断导入</li>
+                  <li>自动匹配结果可在下拉菜单中手动修改或清空</li>
+                  <li>未匹配的字段显示黄色警告，必填字段缺失会阻断导入</li>
+                  <li>可点击「自动匹配」按钮重新根据当前表头执行匹配</li>
+                  <li>点击「恢复上次映射」加载本地保存的配置（会自动过滤失效列）</li>
                 </ul>
               </div>
 
@@ -314,16 +326,19 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
                 <p className="mb-1 font-medium text-slate-300">4. 本地持久化：</p>
                 <ul className="ml-4 list-disc space-y-0.5">
                   <li>确认后的映射按文件类型独立保存到 localStorage（key: <code className="rounded bg-slate-900/60 px-1 py-0.5 font-mono text-purple-200">cold-chain-field-mappings-v1</code>）</li>
+                  <li>每种文件类型（到货/日志/复核）的映射<strong>互不串用</strong>，各自保存独立的配置和对应表头</li>
                   <li>刷新页面或重启浏览器后映射仍然可用，可点击「恢复上次映射」快速载入</li>
                   <li>下次导入 CSV 表头发生变化时，自动提示失效的映射项并允许重新选择</li>
                 </ul>
               </div>
 
               <div>
-                <p className="mb-1 font-medium text-slate-300">5. 审计与导出：</p>
+                <p className="mb-1 font-medium text-slate-300">5. 审计追溯：</p>
                 <ul className="ml-4 list-disc space-y-0.5">
-                  <li>导入成功、阻断（必填缺失/冲突）、映射变更均会写入审计日志</li>
-                  <li>导出 JSON 时自动附带字段映射快照，便于追溯数据来源的列对应关系</li>
+                  <li><strong>预览层阻断：</strong>打开预览时若检测到源列失效、新增列、必填缺失或冲突，立即写入 <code className="text-purple-200">import_blocked</code> 审计日志，记录文件类型、文件名、原因、失效字段、当前表头、映射快照</li>
+                  <li><strong>映射变更：</strong>手动修改任意字段映射时写入 <code className="text-purple-200">field_mapping_changed</code> 审计日志，附带完整映射快照和当前表头</li>
+                  <li><strong>成功导入：</strong>导入成功时写入 <code className="text-purple-200">import_arrival</code> / <code className="text-purple-200">import_log</code> / <code className="text-purple-200">import_review</code>，附带映射快照和表头</li>
+                  <li><strong>导出 JSON：</strong>导出 JSON 自动附带 <code className="text-purple-200">fieldMappings</code> 字段（包含所有文件类型的完整映射 + 表头 + 保存时间），审计日志中同样保存快照</li>
                 </ul>
               </div>
             </div>

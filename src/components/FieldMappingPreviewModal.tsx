@@ -3,7 +3,6 @@ import {
   X,
   Check,
   AlertTriangle,
-  AlertCircle,
   Save,
   RefreshCw,
   FileText,
@@ -12,16 +11,21 @@ import {
   ChevronUp,
   Wand2,
   History,
+  Info,
+  ShieldAlert,
+  ShieldCheck,
+  PlusCircle,
+  AlertOctagon,
 } from 'lucide-react';
 import type { FC } from 'react';
-import type { FieldMappingPreview, FieldMapping, ColumnMappingSnapshot, FileType } from '@/types';
+import type { FieldMappingPreview, FieldMapping, ColumnMappingSnapshot, FileType, MappingHealthIssue } from '@/types';
 import { FIELD_LABELS } from '@/types';
 import {
   validateMappings,
   autoMatchField,
   saveFieldMappings,
   applySavedMappings,
-  checkSavedMappingOutdated,
+  checkMappingHealth,
 } from '@/services/csvService';
 import { cn } from '@/lib/utils';
 
@@ -47,16 +51,30 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [showPreview, setShowPreview] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const [attentionAcknowledged, setAttentionAcknowledged] = useState(false);
 
   useEffect(() => {
     if (preview) {
       setMappings(preview.mappings.map((m) => ({ ...m })));
+      setAttentionAcknowledged(false);
     }
   }, [preview]);
 
   const validation = useMemo(() => validateMappings(mappings), [mappings]);
 
+  const currentHealthReport = useMemo(() => {
+    if (!preview) return null;
+    return checkMappingHealth(preview.fileType, preview.headers, mappings);
+  }, [preview, mappings]);
+
   const labels = preview ? FIELD_LABELS[preview.fileType] : {};
+
+  const hasBlockingErrors = validation.conflicts.length > 0 || validation.missingRequired.length > 0;
+  const hasWarnings = currentHealthReport && (
+    currentHealthReport.invalidatedSourceColumns.length > 0 || currentHealthReport.newColumns.length > 0
+  );
+  const needsExplicitAcknowledgement = hasWarnings && !hasBlockingErrors;
+  const canProceedWithAttention = hasBlockingErrors ? false : (needsExplicitAcknowledgement ? attentionAcknowledged : true);
 
   const handleSelectColumn = (targetField: string, sourceColumn: string | null) => {
     setMappings((prev) =>
@@ -66,12 +84,14 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
           : m,
       ),
     );
+    setAttentionAcknowledged(false);
   };
 
   const handleAutoMatch = () => {
     if (!preview) return;
     const newMappings = autoMatchField(preview.fileType, preview.headers);
     setMappings(newMappings);
+    setAttentionAcknowledged(false);
   };
 
   const handleApplySaved = () => {
@@ -79,6 +99,7 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
     const autoMappings = autoMatchField(preview.fileType, preview.headers);
     const { mappings: applied } = applySavedMappings(preview.fileType, autoMappings, preview.headers);
     setMappings(applied);
+    setAttentionAcknowledged(false);
   };
 
   const handleSaveMapping = () => {
@@ -87,11 +108,11 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
       targetField: m.targetField,
       sourceColumn: m.sourceColumn,
     }));
-    saveFieldMappings(preview.fileType, snapshot);
+    saveFieldMappings(preview.fileType, snapshot, preview.headers);
   };
 
   const handleConfirm = async () => {
-    if (!validation.canProceed) return;
+    if (!canProceedWithAttention) return;
     setConfirming(true);
     try {
       handleSaveMapping();
@@ -119,7 +140,36 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
   if (!open || !preview) return null;
 
   const mappedPreviewRows = getMappedPreviewRows();
-  const savedCheck = checkSavedMappingOutdated(preview.fileType, preview.headers);
+  const healthIssues = currentHealthReport?.issues || [];
+
+  const getIssueIcon = (issue: MappingHealthIssue) => {
+    switch (issue.type) {
+      case 'saved_mapping_applied':
+        return <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />;
+      case 'source_column_invalidated':
+        return <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />;
+      case 'new_column_detected':
+        return <PlusCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />;
+      case 'missing_required':
+        return <AlertOctagon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />;
+      case 'source_column_conflict':
+        return <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />;
+      default:
+        return <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />;
+    }
+  };
+
+  const getIssueStyle = (issue: MappingHealthIssue) => {
+    switch (issue.severity) {
+      case 'error':
+        return 'border-red-500/30 bg-red-500/10 text-red-200';
+      case 'warning':
+        return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+      case 'info':
+      default:
+        return 'border-sky-500/30 bg-sky-500/10 text-sky-200';
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -127,14 +177,48 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
       <div className="relative z-10 flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700/60 px-5 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md border border-sky-500/30 bg-sky-500/10">
-              <Database className="h-4.5 w-4.5 text-sky-300" />
+            <div className={cn(
+              'flex h-9 w-9 items-center justify-center rounded-md border',
+              currentHealthReport?.isHealthy
+                ? 'border-emerald-500/30 bg-emerald-500/10'
+                : currentHealthReport?.needsUserAttention
+                ? 'border-amber-500/30 bg-amber-500/10'
+                : 'border-sky-500/30 bg-sky-500/10',
+            )}>
+              {currentHealthReport?.isHealthy && !currentHealthReport?.needsUserAttention ? (
+                <ShieldCheck className="h-4.5 w-4.5 text-emerald-300" />
+              ) : currentHealthReport?.needsUserAttention ? (
+                <ShieldAlert className="h-4.5 w-4.5 text-amber-300" />
+              ) : (
+                <Database className="h-4.5 w-4.5 text-sky-300" />
+              )}
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-slate-100">字段映射预览 · {FILE_TYPE_LABEL[preview.fileType]}</h2>
+              <h2 className="text-sm font-semibold text-slate-100">
+                字段映射预览 · {FILE_TYPE_LABEL[preview.fileType]}
+                {currentHealthReport && (
+                  <span className={cn(
+                    'ml-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]',
+                    currentHealthReport.isHealthy && !currentHealthReport.needsUserAttention
+                      ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                      : currentHealthReport.isHealthy
+                      ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      : 'bg-red-500/15 text-red-300 border border-red-500/30',
+                  )}>
+                    {currentHealthReport.isHealthy && !currentHealthReport.needsUserAttention
+                      ? '映射健康'
+                      : currentHealthReport.isHealthy
+                      ? '需关注'
+                      : '存在阻断问题'}
+                  </span>
+                )}
+              </h2>
               <p className="mt-0.5 text-[11px] text-slate-400">
                 文件: <span className="font-mono text-slate-300">{preview.fileName}</span> ·
                 共 {preview.headers.length} 列 · 预览 {preview.previewRows.length} 行数据
+                {currentHealthReport?.savedMappingApplied && preview.savedMappingAvailable && (
+                  <span className="ml-2 text-purple-300">· 已加载本地映射</span>
+                )}
               </p>
             </div>
           </div>
@@ -146,39 +230,37 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
           </button>
         </div>
 
-        {(validation.conflicts.length > 0 || validation.missingRequired.length > 0 || preview.savedMappingOutdated) && (
+        {healthIssues.length > 0 && (
           <div className="space-y-2 border-b border-slate-700/60 bg-slate-950/40 px-5 py-3">
-            {preview.savedMappingOutdated && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-200">
-                <History className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                <div>
-                  <span className="font-medium">保存的映射已部分失效：</span>
-                  以下字段在当前 CSV 中找不到对应列：
-                  {savedCheck.outdatedFields.map((f) => labels[f] || f).join('、')}
-                  。请手动重新选择或使用自动匹配。
+            {healthIssues.map((issue, idx) => (
+              <div key={idx} className={cn('flex items-start gap-2 rounded-md border px-3 py-2 text-[11px]', getIssueStyle(issue))}>
+                {getIssueIcon(issue)}
+                <div className="flex-1">
+                  <span className="font-medium">
+                    {issue.type === 'saved_mapping_applied' && '映射沿用：'}
+                    {issue.type === 'source_column_invalidated' && '源列失效：'}
+                    {issue.type === 'new_column_detected' && '新增列：'}
+                    {issue.type === 'missing_required' && '必填缺失：'}
+                    {issue.type === 'source_column_conflict' && '同源冲突：'}
+                  </span>
+                  {issue.message}
                 </div>
               </div>
-            )}
-            {validation.missingRequired.length > 0 && (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                <div>
-                  <span className="font-medium">缺少必填字段：</span>
-                  {validation.missingRequired.join('、')}
-                  。请为这些字段选择对应的 CSV 列。
-                </div>
-              </div>
-            )}
-            {validation.conflicts.length > 0 && (
-              <div className="flex items-start gap-2 rounded-md border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-[11px] text-orange-200">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                <div>
-                  <span className="font-medium">映射冲突：</span>
-                  {validation.conflicts.map((c, i) => (
-                    <div key={i}>{c}</div>
-                  ))}
-                  同一列不能同时映射到多个字段。
-                </div>
+            ))}
+
+            {needsExplicitAcknowledgement && (
+              <div className="flex items-start gap-2 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-[11px] text-violet-200">
+                <input
+                  type="checkbox"
+                  id="ack-mapping-warnings"
+                  checked={attentionAcknowledged}
+                  onChange={(e) => setAttentionAcknowledged(e.target.checked)}
+                  className="mt-0.5 h-3.5 w-3.5 accent-violet-500"
+                />
+                <label htmlFor="ack-mapping-warnings" className="cursor-pointer select-none">
+                  <span className="font-medium">我已确认映射状态：</span>
+                  失效列不会被静默沿用，新增列如不需要可留空，点击确认导入继续。
+                </label>
               </div>
             )}
           </div>
@@ -371,35 +453,73 @@ const FieldMappingPreviewModal: FC<FieldMappingPreviewModalProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-700/60 bg-slate-950/40 px-5 py-3">
-          <button
-            onClick={onClose}
-            className="rounded-md border border-slate-600 bg-slate-800/60 px-3.5 py-1.5 text-xs text-slate-300 transition hover:bg-slate-700/60"
-          >
-            取消
-          </button>
-          <button
-            onClick={handleConfirm}
-            disabled={!validation.canProceed || confirming}
-            className={cn(
-              'flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-xs font-medium transition',
-              validation.canProceed
-                ? 'border border-sky-500/40 bg-sky-500/20 text-sky-200 hover:bg-sky-500/30'
-                : 'cursor-not-allowed border border-slate-700 bg-slate-800/40 text-slate-500',
-            )}
-          >
-            {confirming ? (
+        <div className="flex items-center justify-between gap-2 border-t border-slate-700/60 bg-slate-950/40 px-5 py-3">
+          <div className="text-[11px] text-slate-400">
+            {currentHealthReport && (
               <>
-                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-500 border-t-sky-400" />
-                导入中...
-              </>
-            ) : (
-              <>
-                <Check className="h-3.5 w-3.5" />
-                确认映射并导入
+                {currentHealthReport.invalidatedSourceColumns.length > 0 && (
+                  <span className="mr-3 text-amber-300">
+                    <ShieldAlert className="mr-1 inline h-3 w-3" />
+                    {currentHealthReport.invalidatedSourceColumns.length} 个源列失效
+                  </span>
+                )}
+                {currentHealthReport.newColumns.length > 0 && (
+                  <span className="mr-3 text-sky-300">
+                    <PlusCircle className="mr-1 inline h-3 w-3" />
+                    {currentHealthReport.newColumns.length} 个新增列
+                  </span>
+                )}
+                {currentHealthReport.missingRequiredFields.length > 0 && (
+                  <span className="mr-3 text-red-300">
+                    <AlertOctagon className="mr-1 inline h-3 w-3" />
+                    {currentHealthReport.missingRequiredFields.length} 个必填缺失
+                  </span>
+                )}
+                {currentHealthReport.conflictingSourceColumns.length > 0 && (
+                  <span className="mr-3 text-orange-300">
+                    <AlertTriangle className="mr-1 inline h-3 w-3" />
+                    {currentHealthReport.conflictingSourceColumns.length} 个同源冲突
+                  </span>
+                )}
               </>
             )}
-          </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-md border border-slate-600 bg-slate-800/60 px-3.5 py-1.5 text-xs text-slate-300 transition hover:bg-slate-700/60"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={!canProceedWithAttention || confirming}
+              className={cn(
+                'flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-xs font-medium transition',
+                canProceedWithAttention
+                  ? needsExplicitAcknowledgement
+                    ? 'border border-violet-500/40 bg-violet-500/20 text-violet-200 hover:bg-violet-500/30'
+                    : 'border border-sky-500/40 bg-sky-500/20 text-sky-200 hover:bg-sky-500/30'
+                  : 'cursor-not-allowed border border-slate-700 bg-slate-800/40 text-slate-500',
+              )}
+            >
+              {confirming ? (
+                <>
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-500 border-t-sky-400" />
+                  导入中...
+                </>
+              ) : (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  {needsExplicitAcknowledgement
+                    ? '确认关注项并导入'
+                    : hasBlockingErrors
+                    ? '请先修复阻断问题'
+                    : '确认映射并导入'}
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

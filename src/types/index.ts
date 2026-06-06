@@ -380,6 +380,32 @@ export interface ColumnMappingSnapshot {
   sourceColumn: string | null;
 }
 
+export type MappingHealthIssueType =
+  | 'saved_mapping_applied'
+  | 'source_column_invalidated'
+  | 'new_column_detected'
+  | 'missing_required'
+  | 'source_column_conflict';
+
+export interface MappingHealthIssue {
+  type: MappingHealthIssueType;
+  severity: 'info' | 'warning' | 'error';
+  targetField?: string;
+  sourceColumn?: string;
+  message: string;
+}
+
+export interface MappingHealthReport {
+  savedMappingApplied: boolean;
+  invalidatedSourceColumns: Array<{ targetField: string; savedSourceColumn: string }>;
+  newColumns: string[];
+  missingRequiredFields: string[];
+  conflictingSourceColumns: Array<{ sourceColumn: string; targetFields: string[] }>;
+  issues: MappingHealthIssue[];
+  isHealthy: boolean;
+  needsUserAttention: boolean;
+}
+
 export interface FieldMappingPreview {
   fileType: FileType;
   fileName: string;
@@ -394,12 +420,19 @@ export interface FieldMappingPreview {
   savedMappingOutdated: boolean;
   outdatedFields?: string[];
   mappingSnapshot?: ColumnMappingSnapshot[];
+  healthReport: MappingHealthReport;
+}
+
+export interface FileTypeMappingsWithHeaders {
+  mappings: ColumnMappingSnapshot[];
+  headers: string[];
+  savedAt: string;
 }
 
 export interface SavedFieldMappings {
-  arrival?: ColumnMappingSnapshot[];
-  log?: ColumnMappingSnapshot[];
-  review?: ColumnMappingSnapshot[];
+  arrival?: FileTypeMappingsWithHeaders;
+  log?: FileTypeMappingsWithHeaders;
+  review?: FileTypeMappingsWithHeaders;
   updatedAt?: string;
 }
 

@@ -43,6 +43,7 @@ import {
   saveFieldMappings,
   wrapImportError,
   wrapImportSuccess,
+  parseCsvFile,
 } from '@/services/csvService';
 import { detectAllAnomalies } from '@/services/anomalyEngine';
 import { sampleArrivals, sampleLogs, sampleReviews } from '@/data/sampleData';
@@ -76,6 +77,12 @@ function genAuditId(): string {
 function genHandoverId(): string {
   return `HO-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 }
+
+const FILE_TYPE_LABEL: Record<FileType, string> = {
+  arrival: '到货清单',
+  log: '温度日志',
+  review: '复核记录',
+};
 
 function createAuditLog(
   action: AuditAction,
@@ -122,12 +129,52 @@ export const useAppStore = create<AppState>()(
         handoverFilter: initialHandoverFilter,
 
         previewFieldMapping: async (file: File, fileType: FileType): Promise<FieldMappingPreview> => {
-          return buildFieldMappingPreview(file, fileType);
+          const preview = await buildFieldMappingPreview(file, fileType);
+          const health = preview.healthReport;
+          if (health && (health.needsUserAttention || !health.isHealthy)) {
+            const reasons: string[] = [];
+            if (health.invalidatedSourceColumns.length > 0) {
+              reasons.push(`失效字段: ${health.invalidatedSourceColumns.map((i) => i.targetField).join(',')}`);
+            }
+            if (health.newColumns.length > 0) {
+              reasons.push(`新增列: ${health.newColumns.join(',')}`);
+            }
+            if (health.missingRequiredFields.length > 0) {
+              reasons.push(`必填缺失: ${health.missingRequiredFields.join(',')}`);
+            }
+            if (health.conflictingSourceColumns.length > 0) {
+              reasons.push(`同源冲突: ${health.conflictingSourceColumns.map((c) => c.sourceColumn).join(',')}`);
+            }
+            const mappingSnapshot: ColumnMappingSnapshot[] = preview.mappings.map((m) => ({
+              targetField: m.targetField,
+              sourceColumn: m.sourceColumn,
+            }));
+            appendAudit(
+              createAuditLog(
+                'import_blocked',
+                get().currentReviewer || '质控员',
+                `预览${FILE_TYPE_LABEL[fileType]} ${file.name} 发现映射问题：${reasons.join('；') || health.issues.map((i) => i.message).slice(0, 3).join('；')}`,
+                {
+                  fileName: file.name,
+                  fileType,
+                  headers: preview.headers,
+                  invalidatedFields: health.invalidatedSourceColumns,
+                  newColumns: health.newColumns,
+                  missingRequiredFields: health.missingRequiredFields,
+                  conflictingSourceColumns: health.conflictingSourceColumns,
+                  fieldMappings: mappingSnapshot,
+                },
+              ),
+            );
+          }
+          return preview;
         },
 
         importArrivals: async (file: File, fieldMappings?: FieldMapping[]): Promise<ImportResult> => {
         const existing = get().arrivalBatches;
         const hash = await computeFileHash(file);
+        const rows = await parseCsvFile(file);
+        const headers = Object.keys(rows[0] || {});
         const isDuplicate = get().importRecords.some(
           (r) => r.fileType === 'arrival' && r.fileHash === hash,
         );
@@ -147,11 +194,11 @@ export const useAppStore = create<AppState>()(
                 'field_mapping_changed',
                 get().currentReviewer,
                 `到货清单字段映射变更: ${changedMappings.map((m) => `${labels[m.targetField] || m.targetField} ← "${m.sourceColumn}"`).join('; ')}`,
-                { fileType: 'arrival', fileName: file.name, mappings: mappingSnapshot },
+                { fileType: 'arrival', fileName: file.name, mappings: mappingSnapshot, headers },
               ),
             );
           }
-          saveFieldMappings('arrival', mappingSnapshot);
+          saveFieldMappings('arrival', mappingSnapshot, headers);
         }
         const result = await parseArrivalCsv(file, existing, fieldMappings);
         if (result.missingColumns.length > 0) {
@@ -160,7 +207,7 @@ export const useAppStore = create<AppState>()(
               'import_blocked',
               get().currentReviewer,
               `导入到货清单 ${file.name} 被阻断：缺少必填列 ${result.missingColumns.join(', ')}`,
-              { fileName: file.name, fileType: 'arrival', missingColumns: result.missingColumns },
+              { fileName: file.name, fileType: 'arrival', missingColumns: result.missingColumns, headers, fieldMappings: fieldMappings?.map((m) => ({ targetField: m.targetField, sourceColumn: m.sourceColumn })) },
             ),
           );
           return wrapImportError(
@@ -189,7 +236,7 @@ export const useAppStore = create<AppState>()(
             'import_arrival',
             get().currentReviewer,
             `导入到货清单 ${file.name}：有效 ${record.validRows} 行，无效 ${record.invalidRows} 行`,
-            { fileName: file.name, validRows: record.validRows, invalidRows: record.invalidRows, fieldMappings: fieldMappingsForLog },
+            { fileName: file.name, validRows: record.validRows, invalidRows: record.invalidRows, fieldMappings: fieldMappingsForLog, headers },
           ),
         );
         get().detectAnomalies();
@@ -199,6 +246,8 @@ export const useAppStore = create<AppState>()(
       importTemperatureLogs: async (file: File, fieldMappings?: FieldMapping[]): Promise<ImportResult> => {
         const existing = get().temperatureLogs;
         const hash = await computeFileHash(file);
+        const rows = await parseCsvFile(file);
+        const headers = Object.keys(rows[0] || {});
         const isDuplicate = get().importRecords.some(
           (r) => r.fileType === 'log' && r.fileHash === hash,
         );
@@ -218,11 +267,11 @@ export const useAppStore = create<AppState>()(
                 'field_mapping_changed',
                 get().currentReviewer,
                 `温度日志字段映射变更: ${changedMappings.map((m) => `${labels[m.targetField] || m.targetField} ← "${m.sourceColumn}"`).join('; ')}`,
-                { fileType: 'log', fileName: file.name, mappings: mappingSnapshot },
+                { fileType: 'log', fileName: file.name, mappings: mappingSnapshot, headers },
               ),
             );
           }
-          saveFieldMappings('log', mappingSnapshot);
+          saveFieldMappings('log', mappingSnapshot, headers);
         }
         const result = await parseLogCsv(file, existing, fieldMappings);
         if (result.missingColumns.length > 0) {
@@ -231,7 +280,7 @@ export const useAppStore = create<AppState>()(
               'import_blocked',
               get().currentReviewer,
               `导入温度日志 ${file.name} 被阻断：缺少必填列 ${result.missingColumns.join(', ')}`,
-              { fileName: file.name, fileType: 'log', missingColumns: result.missingColumns },
+              { fileName: file.name, fileType: 'log', missingColumns: result.missingColumns, headers, fieldMappings: fieldMappings?.map((m) => ({ targetField: m.targetField, sourceColumn: m.sourceColumn })) },
             ),
           );
           return wrapImportError(
@@ -265,7 +314,7 @@ export const useAppStore = create<AppState>()(
             'import_log',
             get().currentReviewer,
             `导入温度日志 ${file.name}：有效 ${record.validRows} 行，无效 ${record.invalidRows} 行`,
-            { fileName: file.name, validRows: record.validRows, invalidRows: record.invalidRows, fieldMappings: fieldMappingsForLog },
+            { fileName: file.name, validRows: record.validRows, invalidRows: record.invalidRows, fieldMappings: fieldMappingsForLog, headers },
           ),
         );
         get().detectAnomalies();
@@ -275,6 +324,8 @@ export const useAppStore = create<AppState>()(
       importManualReviews: async (file: File, fieldMappings?: FieldMapping[]): Promise<ImportResult> => {
         const existing = get().manualReviews;
         const hash = await computeFileHash(file);
+        const rows = await parseCsvFile(file);
+        const headers = Object.keys(rows[0] || {});
         const isDuplicate = get().importRecords.some(
           (r) => r.fileType === 'review' && r.fileHash === hash,
         );
@@ -294,11 +345,11 @@ export const useAppStore = create<AppState>()(
                 'field_mapping_changed',
                 get().currentReviewer,
                 `复核记录字段映射变更: ${changedMappings.map((m) => `${labels[m.targetField] || m.targetField} ← "${m.sourceColumn}"`).join('; ')}`,
-                { fileType: 'review', fileName: file.name, mappings: mappingSnapshot },
+                { fileType: 'review', fileName: file.name, mappings: mappingSnapshot, headers },
               ),
             );
           }
-          saveFieldMappings('review', mappingSnapshot);
+          saveFieldMappings('review', mappingSnapshot, headers);
         }
         const result = await parseReviewCsv(file, existing, fieldMappings);
         if (result.missingColumns.length > 0) {
@@ -307,7 +358,7 @@ export const useAppStore = create<AppState>()(
               'import_blocked',
               get().currentReviewer,
               `导入复核记录 ${file.name} 被阻断：缺少必填列 ${result.missingColumns.join(', ')}`,
-              { fileName: file.name, fileType: 'review', missingColumns: result.missingColumns },
+              { fileName: file.name, fileType: 'review', missingColumns: result.missingColumns, headers, fieldMappings: fieldMappings?.map((m) => ({ targetField: m.targetField, sourceColumn: m.sourceColumn })) },
             ),
           );
           return wrapImportError(
@@ -336,7 +387,7 @@ export const useAppStore = create<AppState>()(
             'import_review',
             get().currentReviewer,
             `导入复核记录 ${file.name}：有效 ${record.validRows} 行，无效 ${record.invalidRows} 行`,
-            { fileName: file.name, validRows: record.validRows, invalidRows: record.invalidRows, fieldMappings: fieldMappingsForLog },
+            { fileName: file.name, validRows: record.validRows, invalidRows: record.invalidRows, fieldMappings: fieldMappingsForLog, headers },
           ),
         );
         get().detectAnomalies();
@@ -508,13 +559,14 @@ export const useAppStore = create<AppState>()(
         const filteredAudit = applyAuditLogFilters(s.auditLogs, s.auditLogFilter);
         const exportTime = new Date().toISOString();
         const ts = exportTime.replace(/[:.]/g, '-').slice(0, 19);
+        const fieldMappingsSnapshot: SavedFieldMappings = loadFieldMappings();
 
         appendAudit(
           createAuditLog(
             'export_data',
             s.currentReviewer || '未知复核人',
             `导出数据：${format.toUpperCase()}，共 ${filtered.length} 条异常${filteredAudit.length > 0 ? `，${filteredAudit.length} 条审计日志` : ''}`,
-            { format, anomalyCount: filtered.length, auditLogCount: filteredAudit.length },
+            { format, anomalyCount: filtered.length, auditLogCount: filteredAudit.length, fieldMappings: fieldMappingsSnapshot },
           ),
         );
 
