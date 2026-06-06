@@ -6,6 +6,51 @@ export type AnomalySeverity = 'warning' | 'danger';
 
 export type ReviewConclusion = 'release' | 'quarantine' | 'ignore' | 'unreviewed';
 
+export interface ReviewRules {
+  overtempThreshold: number;
+  missingLogIntervalMin: number;
+  overtempDurationDangerMin: number;
+  overtempDeltaDanger: number;
+  missingLogGapDangerMin: number;
+}
+
+export const DEFAULT_REVIEW_RULES: ReviewRules = {
+  overtempThreshold: 0,
+  missingLogIntervalMin: 30,
+  overtempDurationDangerMin: 30,
+  overtempDeltaDanger: 5,
+  missingLogGapDangerMin: 120,
+};
+
+export type AuditAction =
+  | 'import_arrival'
+  | 'import_log'
+  | 'import_review'
+  | 'load_sample'
+  | 'change_rules'
+  | 'review_decision'
+  | 'undo_review'
+  | 'clear_all'
+  | 'export_data';
+
+export interface AuditLog {
+  id: string;
+  action: AuditAction;
+  operator: string;
+  timestamp: string;
+  details: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReviewHistoryEntry {
+  id: string;
+  batchId: string;
+  conclusion: ReviewConclusion;
+  reviewer: string;
+  remark: string;
+  updatedAt: string;
+}
+
 export interface ArrivalBatch {
   batchId: string;
   productName: string;
@@ -123,16 +168,25 @@ export interface FilterState {
   reviewStatuses: ReviewConclusion[];
 }
 
+export type AuditLogFilter = {
+  actions: AuditAction[];
+  operator: string;
+};
+
 export interface AppState {
   arrivalBatches: ArrivalBatch[];
   temperatureLogs: TemperatureLog[];
   manualReviews: ManualReviewRecord[];
   anomalies: Anomaly[];
   reviewDecisions: Record<string, ReviewDecision>;
+  reviewHistory: Record<string, ReviewHistoryEntry[]>;
   importRecords: ImportRecord[];
+  auditLogs: AuditLog[];
+  reviewRules: ReviewRules;
 
   currentReviewer: string;
   filters: FilterState;
+  auditLogFilter: AuditLogFilter;
   selectedBatchId: string | null;
 
   importArrivals: (file: File) => Promise<ImportResult>;
@@ -141,8 +195,12 @@ export interface AppState {
   loadSampleData: () => void;
   detectAnomalies: () => void;
   setReviewDecision: (batchId: string, conclusion: ReviewConclusion, remark: string) => void;
+  undoReviewDecision: (batchId: string) => void;
+  setReviewRules: (rules: Partial<ReviewRules>) => void;
+  resetReviewRules: () => void;
   setCurrentReviewer: (name: string) => void;
   setFilters: (filters: Partial<FilterState>) => void;
+  setAuditLogFilter: (filters: Partial<AuditLogFilter>) => void;
   setSelectedBatchId: (batchId: string | null) => void;
   exportData: (format: 'json' | 'csv') => void;
   clearAll: () => void;

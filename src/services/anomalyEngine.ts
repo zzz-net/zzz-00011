@@ -8,8 +8,10 @@ import type {
   OvertimeInterval,
   ReviewConflictItem,
   ReviewDecision,
+  ReviewRules,
   TemperatureLog,
 } from '@/types';
+import { DEFAULT_REVIEW_RULES } from '@/types';
 
 function genId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -18,6 +20,7 @@ function genId(prefix: string): string {
 function detectOvertemp(
   batch: ArrivalBatch,
   logs: TemperatureLog[],
+  rules: ReviewRules,
 ): Anomaly | null {
   const validLogs = logs
     .filter((l) => l.isValid && l.batchId === batch.batchId)
@@ -30,8 +33,11 @@ function detectOvertemp(
   let currentInterval: OvertimeInterval | null = null;
   let hasOvertemp = false;
 
+  const effectiveMin = batch.requiredTempMin - rules.overtempThreshold;
+  const effectiveMax = batch.requiredTempMax + rules.overtempThreshold;
+
   for (const log of validLogs) {
-    const isOver = log.temperature > batch.requiredTempMax || log.temperature < batch.requiredTempMin;
+    const isOver = log.temperature > effectiveMax || log.temperature < effectiveMin;
     if (isOver) {
       hasOvertemp = true;
       sourceRows.push(log.sourceRow);
@@ -75,16 +81,33 @@ function detectOvertemp(
 
   const totalDuration = intervals.reduce((s, i) => s + i.durationMin, 0);
   const worst = intervals.reduce(
-    (a, b) => (Math.abs(b.maxTemp - batch.requiredTempMax) > Math.abs(a.maxTemp - batch.requiredTempMax) ? b : a),
+    (a, b) => {
+      const deltaA = Math.max(
+        Math.abs(a.maxTemp - batch.requiredTempMax),
+        Math.abs(a.minTemp - batch.requiredTempMin),
+      );
+      const deltaB = Math.max(
+        Math.abs(b.maxTemp - batch.requiredTempMax),
+        Math.abs(b.minTemp - batch.requiredTempMin),
+      );
+      return deltaB > deltaA ? b : a;
+    },
     intervals[0],
+  );
+  const worstDelta = Math.max(
+    Math.abs(worst.maxTemp - batch.requiredTempMax),
+    Math.abs(worst.minTemp - batch.requiredTempMin),
   );
 
   return {
     id: genId('anom-over'),
     batchId: batch.batchId,
     type: 'overtemp',
-    severity: totalDuration > 30 || Math.abs(worst.maxTemp - batch.requiredTempMax) > 5 ? 'danger' : 'warning',
-    description: `检测到 ${intervals.length} 段超温区间，累计 ${totalDuration} 分钟，峰值温度 ${worst.maxTemp.toFixed(1)}°C（要求 ${batch.requiredTempMin}~${batch.requiredTempMax}°C）`,
+    severity:
+      totalDuration > rules.overtempDurationDangerMin || worstDelta > rules.overtempDeltaDanger
+        ? 'danger'
+        : 'warning',
+    description: `检测到 ${intervals.length} 段超温区间，累计 ${totalDuration} 分钟，峰值温度偏差 ${worstDelta.toFixed(1)}°C（要求 ${batch.requiredTempMin}~${batch.requiredTempMax}°C，阈值±${rules.overtempThreshold}°C）`,
     detail: { overtimeIntervals: intervals },
     sourceRows: Array.from(new Set(sourceRows)),
   };
@@ -93,6 +116,7 @@ function detectOvertemp(
 function detectMissingLog(
   batch: ArrivalBatch,
   logs: TemperatureLog[],
+  rules: ReviewRules,
 ): Anomaly | null {
   const validLogs = logs
     .filter((l) => l.isValid && l.batchId === batch.batchId)
@@ -109,11 +133,13 @@ function detectMissingLog(
       severity: 'danger',
       description: '该批次无有效温度日志记录',
       detail: {
-        missingSegments: [{
-          expectedStartTime: batch.arrivalTime,
-          expectedEndTime: batch.arrivalTime,
-          gapMin: 0,
-        }],
+        missingSegments: [
+          {
+            expectedStartTime: batch.arrivalTime,
+            expectedEndTime: batch.arrivalTime,
+            gapMin: 0,
+          },
+        ],
       },
       sourceRows: [],
     };
@@ -123,7 +149,7 @@ function detectMissingLog(
   const firstLog = parseISO(validLogs[0].timestamp);
   const lastLog = parseISO(validLogs[validLogs.length - 1].timestamp);
 
-  if (differenceInMinutes(firstLog, arrivalTime) > 30) {
+  if (differenceInMinutes(firstLog, arrivalTime) > rules.missingLogIntervalMin) {
     segments.push({
       expectedStartTime: batch.arrivalTime,
       expectedEndTime: validLogs[0].timestamp,
@@ -135,7 +161,7 @@ function detectMissingLog(
     const prev = parseISO(validLogs[i - 1].timestamp);
     const curr = parseISO(validLogs[i].timestamp);
     const gap = differenceInMinutes(curr, prev);
-    if (gap > 30) {
+    if (gap > rules.missingLogIntervalMin) {
       segments.push({
         expectedStartTime: validLogs[i - 1].timestamp,
         expectedEndTime: validLogs[i].timestamp,
@@ -145,7 +171,7 @@ function detectMissingLog(
     }
   }
 
-  if (differenceInMinutes(arrivalTime, lastLog) > 30) {
+  if (differenceInMinutes(arrivalTime, lastLog) > rules.missingLogIntervalMin) {
     segments.push({
       expectedStartTime: validLogs[validLogs.length - 1].timestamp,
       expectedEndTime: batch.arrivalTime,
@@ -161,8 +187,8 @@ function detectMissingLog(
     id: genId('anom-miss'),
     batchId: batch.batchId,
     type: 'missing_log',
-    severity: maxGap.gapMin > 120 ? 'danger' : 'warning',
-    description: `检测到 ${segments.length} 段日志缺失，最长间隔 ${maxGap.gapMin} 分钟`,
+    severity: maxGap.gapMin > rules.missingLogGapDangerMin ? 'danger' : 'warning',
+    description: `检测到 ${segments.length} 段日志缺失，最长间隔 ${maxGap.gapMin} 分钟（判定阈值 ${rules.missingLogIntervalMin} 分钟）`,
     detail: { missingSegments: segments },
     sourceRows: Array.from(new Set(sourceRows)),
   };
@@ -222,11 +248,15 @@ function detectReviewConflict(
   }
 
   for (const [batchId, records] of grouped.entries()) {
-    const conclusions = new Set(records.map((r) => r.conclusion).filter((c) => c !== 'unreviewed'));
+    const conclusions = new Set(
+      records.map((r) => r.conclusion).filter((c) => c !== 'unreviewed'),
+    );
     const conflicts: ReviewConflictItem[] = [];
 
     if (conclusions.size > 1) {
-      const sorted = [...records].sort((a, b) => parseISO(a.reviewTime).getTime() - parseISO(b.reviewTime).getTime());
+      const sorted = [...records].sort(
+        (a, b) => parseISO(a.reviewTime).getTime() - parseISO(b.reviewTime).getTime(),
+      );
       for (let i = 1; i < sorted.length; i++) {
         if (sorted[i].conclusion !== sorted[0].conclusion) {
           conflicts.push({
@@ -280,13 +310,14 @@ export function detectAllAnomalies(
   logs: TemperatureLog[],
   reviews: ManualReviewRecord[],
   decisions: Record<string, ReviewDecision>,
+  rules: ReviewRules = DEFAULT_REVIEW_RULES,
 ): Anomaly[] {
   const anomalies: Anomaly[] = [];
 
   for (const batch of batches) {
-    const overtemp = detectOvertemp(batch, logs);
+    const overtemp = detectOvertemp(batch, logs, rules);
     if (overtemp) anomalies.push(overtemp);
-    const missing = detectMissingLog(batch, logs);
+    const missing = detectMissingLog(batch, logs, rules);
     if (missing) anomalies.push(missing);
   }
 
@@ -322,4 +353,16 @@ export const CONCLUSION_COLOR: Record<string, string> = {
   quarantine: 'bg-red-500/20 text-red-300 border-red-500/40',
   ignore: 'bg-slate-500/20 text-slate-300 border-slate-500/40',
   unreviewed: 'bg-zinc-500/20 text-zinc-300 border-zinc-500/40',
+};
+
+export const AUDIT_ACTION_LABEL: Record<string, string> = {
+  import_arrival: '导入到货清单',
+  import_log: '导入温度日志',
+  import_review: '导入复核记录',
+  load_sample: '加载样例数据',
+  change_rules: '修改复核规则',
+  review_decision: '提交复核决策',
+  undo_review: '撤销复核决策',
+  clear_all: '清空所有数据',
+  export_data: '导出数据',
 };

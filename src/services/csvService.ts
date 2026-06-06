@@ -10,7 +10,11 @@ import type {
   ReviewConclusion,
   Anomaly,
   ReviewDecision,
+  AuditLog,
+  ReviewRules,
+  ReviewHistoryEntry,
 } from '@/types';
+import { AUDIT_ACTION_LABEL } from '@/services/anomalyEngine';
 
 const REQUIRED_COLUMNS: Record<FileType, string[]> = {
   arrival: ['batchId', 'productName', 'arrivalTime', 'requiredTempMin', 'requiredTempMax'],
@@ -276,6 +280,7 @@ export function buildExportCsv(
   anomalies: Anomaly[],
   batches: ArrivalBatch[],
   decisions: Record<string, ReviewDecision>,
+  auditLogs?: AuditLog[],
 ): string {
   const batchMap = new Map(batches.map((b) => [b.batchId, b]));
   const headers = [
@@ -317,9 +322,35 @@ export function buildExportCsv(
       d?.reviewer ?? '',
       d?.remark ?? '',
       d?.updatedAt ?? '',
-    ].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',');
+    ]
+      .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+      .join(',');
   });
-  return [headers.join(','), ...rows].join('\n');
+
+  let result = [headers.join(','), ...rows].join('\n');
+
+  if (auditLogs && auditLogs.length > 0) {
+    result += '\n\n';
+    const auditHeaders = [
+      '审计时间',
+      '操作类型',
+      '操作人',
+      '操作详情',
+    ];
+    const auditRows = auditLogs.map((log) => {
+      return [
+        log.timestamp,
+        AUDIT_ACTION_LABEL[log.action] ?? log.action,
+        log.operator,
+        log.details,
+      ]
+        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+        .join(',');
+    });
+    result += [auditHeaders.join(','), ...auditRows].join('\n');
+  }
+
+  return result;
 }
 
 export function buildExportJson(
@@ -329,11 +360,15 @@ export function buildExportJson(
   reviews: ManualReviewRecord[],
   decisions: Record<string, ReviewDecision>,
   exportTime: string,
+  auditLogs?: AuditLog[],
+  reviewRules?: ReviewRules,
+  reviewHistory?: Record<string, ReviewHistoryEntry[]>,
 ): string {
   const batchIds = new Set(anomalies.map((a) => a.batchId));
   return JSON.stringify(
     {
       exportedAt: exportTime,
+      reviewRules: reviewRules ?? null,
       batches: batches.filter((b) => batchIds.has(b.batchId)),
       temperatureLogs: logs.filter((l) => batchIds.has(l.batchId)),
       manualReviews: reviews.filter((r) => batchIds.has(r.batchId)),
@@ -341,6 +376,10 @@ export function buildExportJson(
       reviewDecisions: Object.fromEntries(
         Object.entries(decisions).filter(([k]) => batchIds.has(k)),
       ),
+      reviewHistory: reviewHistory
+        ? Object.fromEntries(Object.entries(reviewHistory).filter(([k]) => batchIds.has(k)))
+        : undefined,
+      auditLogs: auditLogs ?? [],
     },
     null,
     2,

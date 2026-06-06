@@ -6,6 +6,8 @@ import FilterBar from '@/components/FilterBar';
 import AnomalyTable from '@/components/AnomalyTable';
 import ReviewModal from '@/components/ReviewModal';
 import HelpDrawer from '@/components/HelpDrawer';
+import RulesPanel from '@/components/RulesPanel';
+import AuditLogPanel from '@/components/AuditLogPanel';
 
 export default function Home() {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -35,6 +37,7 @@ export default function Home() {
 
         <main className="mx-auto max-w-[1600px] space-y-5 px-6 py-6">
           <ImportPanel />
+          <RulesPanel />
           <MetricCards />
           <FilterBar />
 
@@ -48,10 +51,12 @@ export default function Home() {
             <AnomalyTable onOpenReview={(bid) => setReviewModal({ open: true, batchId: bid })} />
           </div>
 
+          <AuditLogPanel />
+
           <footer className="border-t border-slate-800/60 pt-4 pb-8 text-center text-[10.5px] text-slate-500">
             <p>冷链到货温控复核看板 · 数据完全存储于本地浏览器 · 不依赖外部系统</p>
             <p className="mt-1">
-              所有复核决策（复核人 / 备注 / 更新时间）在页面刷新后自动保留 · 点击右上角 <span className="text-sky-400">?</span> 查看异常复现文档
+              所有复核决策 / 规则配置 / 审计日志在页面刷新后自动保留 · 点击右上角 <span className="text-sky-400">?</span> 查看异常复现文档
             </p>
           </footer>
         </main>
