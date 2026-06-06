@@ -26,6 +26,10 @@ const ALL_ACTIONS: AuditAction[] = [
   'return_handover',
   'complete_handover',
   'handover_conflict',
+  'change_supplier_risk_rules',
+  'supplier_name_merge_confirmed',
+  'supplier_name_merge_kept_separate',
+  'export_supplier_risk',
 ];
 
 function fmtDateTime(iso: string): string {
@@ -55,6 +59,10 @@ const ACTION_COLOR: Record<AuditAction, string> = {
   return_handover: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
   complete_handover: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
   handover_conflict: 'bg-red-600/20 text-red-300 border-red-600/40',
+  change_supplier_risk_rules: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  supplier_name_merge_confirmed: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  supplier_name_merge_kept_separate: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  export_supplier_risk: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
 };
 
 const AuditLogPanel: FC = () => {

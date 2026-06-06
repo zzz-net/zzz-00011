@@ -9,6 +9,7 @@
     "lint": "eslint . && node scripts/check-persist-key.mjs",
     "check:persist-key": "node scripts/check-persist-key.mjs",
     "test:field-mapping": "node scripts/test-field-mapping.mjs",
+    "test:supplier-risk": "node scripts/test-supplier-risk.mjs",
     "preview": "vite preview",
     "check": "tsc -b --noEmit"
   },

@@ -374,6 +374,10 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   return_handover: '退回交接任务',
   complete_handover: '完成交接复核',
   handover_conflict: '交接处理冲突',
+  change_supplier_risk_rules: '修改供应商风险规则',
+  supplier_name_merge_confirmed: '供应商名称合并',
+  supplier_name_merge_kept_separate: '供应商名称保留独立',
+  export_supplier_risk: '导出供应商风险画像',
 };
 
 export const HANDOVER_STATUS_LABEL: Record<string, string> = {

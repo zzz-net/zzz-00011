@@ -10,6 +10,7 @@ import RulesPanel from '@/components/RulesPanel';
 import AuditLogPanel from '@/components/AuditLogPanel';
 import HandoverPanel from '@/components/HandoverPanel';
 import HandoverCreateModal from '@/components/HandoverCreateModal';
+import SupplierRiskPanel from '@/components/SupplierRiskPanel';
 
 export default function Home() {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -53,6 +54,8 @@ export default function Home() {
             </div>
             <AnomalyTable onOpenReview={(bid) => setReviewModal({ open: true, batchId: bid })} />
           </div>
+
+          <SupplierRiskPanel />
 
           <HandoverPanel />
 

@@ -21,6 +21,10 @@ import type {
   MappingHealthReport,
   MappingHealthIssue,
   FileTypeMappingsWithHeaders,
+  SupplierRiskProfile,
+  SupplierRiskFilterState,
+  SupplierRiskRules,
+  SupplierNameResolutionMap,
 } from '@/types';
 import { FIELD_ALIASES, FIELD_LABELS } from '@/types';
 import { AUDIT_ACTION_LABEL, HANDOVER_STATUS_LABEL, ANOMALY_TYPE_LABEL, CONCLUSION_LABEL } from '@/services/anomalyEngine';
@@ -872,4 +876,163 @@ export function downloadFile(content: string, fileName: string, mimeType: string
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+const SUPPLIER_RISK_LEVEL_LABEL: Record<string, string> = {
+  safe: '正常',
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+  critical: '严重',
+};
+
+const TREND_DIRECTION_LABEL: Record<string, string> = {
+  improving: '改善',
+  worsening: '恶化',
+  stable: '稳定',
+  insufficient: '数据不足',
+};
+
+export interface SupplierRiskExportContext {
+  filterSnapshot: SupplierRiskFilterState;
+  rulesSnapshot: SupplierRiskRules;
+  nameResolutionSnapshot: SupplierNameResolutionMap;
+  auditLogs?: AuditLog[];
+  exportTime: string;
+  exportedBy?: string;
+}
+
+export function buildSupplierRiskExportCsv(
+  profiles: SupplierRiskProfile[],
+  ctx: SupplierRiskExportContext,
+): string {
+  const headers = [
+    '供应商名称',
+    '规范名称',
+    '名称变体',
+    '批次数',
+    '超温次数',
+    '缺日志次数',
+    '未登记次数',
+    '复核冲突次数',
+    '异常总数',
+    '严重异常数',
+    '警告异常数',
+    '未处理交接数',
+    '风险等级',
+    '风险评分',
+    '趋势方向',
+    '最近异常时间',
+    '是否存在名称冲突',
+  ];
+
+  const rows = profiles.map((p) => {
+    return [
+      p.displayName,
+      p.canonicalName,
+      p.nameVariants.join(' | '),
+      p.batchCount,
+      p.overtempCount,
+      p.missingLogCount,
+      p.unregisteredCount,
+      p.reviewConflictCount,
+      p.totalAnomalies,
+      p.dangerAnomalies,
+      p.warningAnomalies,
+      p.pendingHandoverCount,
+      SUPPLIER_RISK_LEVEL_LABEL[p.riskLevel] ?? p.riskLevel,
+      p.riskScore,
+      TREND_DIRECTION_LABEL[p.trendDirection] ?? p.trendDirection,
+      p.lastAnomalyAt ?? '',
+      p.hasUnresolvedNameConflict ? '是' : '否',
+    ]
+      .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+      .join(',');
+  });
+
+  let result = [headers.join(','), ...rows].join('\n');
+
+  result += '\n\n';
+  const batchHeaders = [
+    '供应商规范名称',
+    '批次号',
+    '产品名称',
+    '到货时间',
+    '异常ID列表',
+    '异常类型',
+    '原始行号',
+    '复核结论',
+  ];
+  const batchRows: string[] = [];
+  for (const p of profiles) {
+    for (const b of p.batches) {
+      batchRows.push(
+        [
+          p.canonicalName,
+          b.batchId,
+          b.productName ?? '',
+          b.arrivalTime ?? '',
+          b.anomalyIds.join(';'),
+          b.anomalyTypes.map((t) => ANOMALY_TYPE_LABEL[t] ?? t).join(';'),
+          b.sourceRows.join(';'),
+          b.reviewConclusion ? CONCLUSION_LABEL[b.reviewConclusion] ?? b.reviewConclusion : '未复核',
+        ]
+          .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+          .join(','),
+      );
+    }
+  }
+  result += [batchHeaders.join(','), ...batchRows].join('\n');
+
+  result += '\n\n';
+  result += '"===== 筛选条件快照 ====="\n';
+  const filterEntries = Object.entries(ctx.filterSnapshot);
+  for (const [k, v] of filterEntries) {
+    result += `"${k}","${Array.isArray(v) ? v.join(';') : String(v ?? '')}"\n`;
+  }
+
+  result += '\n';
+  result += '"===== 风险等级规则快照 ====="\n';
+  result += `"trendWindowDays","${ctx.rulesSnapshot.trendWindowDays}"\n`;
+  for (const level of ctx.rulesSnapshot.levels) {
+    result += `"level:${level.level}","${JSON.stringify(level.conditions).replace(/"/g, '""')}"\n`;
+  }
+
+  if (ctx.auditLogs && ctx.auditLogs.length > 0) {
+    result += '\n\n';
+    const auditHeaders = ['审计时间', '操作类型', '操作人', '操作详情'];
+    const auditRows = ctx.auditLogs.map((log) => {
+      return [
+        log.timestamp,
+        AUDIT_ACTION_LABEL[log.action] ?? log.action,
+        log.operator,
+        log.details,
+      ]
+        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+        .join(',');
+    });
+    result += [auditHeaders.join(','), ...auditRows].join('\n');
+  }
+
+  return result;
+}
+
+export function buildSupplierRiskExportJson(
+  profiles: SupplierRiskProfile[],
+  ctx: SupplierRiskExportContext,
+): string {
+  return JSON.stringify(
+    {
+      exportedAt: ctx.exportTime,
+      exportedBy: ctx.exportedBy ?? '系统',
+      profileCount: profiles.length,
+      filterSnapshot: ctx.filterSnapshot,
+      rulesSnapshot: ctx.rulesSnapshot,
+      nameResolutionSnapshot: ctx.nameResolutionSnapshot,
+      profiles,
+      auditLogs: ctx.auditLogs ?? [],
+    },
+    null,
+    2,
+  );
 }

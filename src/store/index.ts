@@ -25,8 +25,18 @@ import type {
   RulesPackagePreviewResult,
   SavedFieldMappings,
   TemperatureLog,
+  SupplierRiskRules,
+  SupplierNameResolutionMap,
+  SupplierRiskFilterState,
+  SupplierRiskProfile,
+  SupplierRiskLevelRule,
 } from '@/types';
-import { DEFAULT_REVIEW_RULES, FIELD_LABELS, PERSIST_STORAGE_KEY } from '@/types';
+import {
+  DEFAULT_REVIEW_RULES,
+  DEFAULT_SUPPLIER_RISK_RULES,
+  FIELD_LABELS,
+  PERSIST_STORAGE_KEY,
+} from '@/types';
 import {
   buildExportCsv,
   buildExportJson,
@@ -34,6 +44,8 @@ import {
   buildHandoverExportCsv,
   buildHandoverExportJson,
   buildImportRecord,
+  buildSupplierRiskExportCsv,
+  buildSupplierRiskExportJson,
   computeFileHash,
   downloadFile,
   loadFieldMappings,
@@ -51,6 +63,15 @@ import {
   exportRulesPackageFile,
   previewRulesPackage as previewRulesPackageService,
 } from '@/services/rulesPackage';
+import {
+  buildSupplierRiskProfiles,
+  filterSupplierRiskProfiles,
+  loadSupplierNameResolution,
+  loadSupplierRiskRules,
+  normalizeSupplierName,
+  saveSupplierNameResolution,
+  saveSupplierRiskRules,
+} from '@/services/supplierRiskService';
 
 const initialFilters: FilterState = {
   batchId: '',
@@ -68,6 +89,17 @@ const initialHandoverFilter: HandoverFilterState = {
   statuses: [],
   handedBy: '',
   receivedBy: '',
+};
+
+const initialSupplierRiskFilter: SupplierRiskFilterState = {
+  timeRangeStart: '',
+  timeRangeEnd: '',
+  anomalyTypes: [],
+  reviewStatuses: [],
+  riskLevels: [],
+  keyword: '',
+  onlyWithPendingHandovers: false,
+  onlyWithNameConflicts: false,
 };
 
 function genAuditId(): string {
@@ -127,6 +159,10 @@ export const useAppStore = create<AppState>()(
         handoverRecords: [],
         handoverLocks: [],
         handoverFilter: initialHandoverFilter,
+
+        supplierRiskRules: loadSupplierRiskRules(),
+        supplierNameResolution: loadSupplierNameResolution(),
+        supplierRiskFilter: initialSupplierRiskFilter,
 
         previewFieldMapping: async (file: File, fileType: FileType): Promise<FieldMappingPreview> => {
           const preview = await buildFieldMappingPreview(file, fileType);
@@ -604,6 +640,8 @@ export const useAppStore = create<AppState>()(
         appendAudit(
           createAuditLog('clear_all', get().currentReviewer || '未知复核人', '清空所有数据'),
         );
+        saveSupplierRiskRules(DEFAULT_SUPPLIER_RISK_RULES);
+        saveSupplierNameResolution({ variantToCanonical: {}, conflicts: [] });
         set({
           arrivalBatches: [],
           temperatureLogs: [],
@@ -618,6 +656,9 @@ export const useAppStore = create<AppState>()(
           handoverRecords: [],
           handoverLocks: [],
           handoverFilter: initialHandoverFilter,
+          supplierRiskRules: { ...DEFAULT_SUPPLIER_RISK_RULES },
+          supplierNameResolution: { variantToCanonical: {}, conflicts: [] },
+          supplierRiskFilter: initialSupplierRiskFilter,
         });
       },
 
@@ -956,6 +997,171 @@ export const useAppStore = create<AppState>()(
           downloadFile(content, `cold-chain-handovers-${ts}.json`, 'application/json');
         }
       },
+
+      computeSupplierRiskProfiles: (): SupplierRiskProfile[] => {
+        const s = get();
+        const profiles = buildSupplierRiskProfiles({
+          batches: s.arrivalBatches,
+          anomalies: s.anomalies,
+          logs: s.temperatureLogs,
+          reviews: s.manualReviews,
+          decisions: s.reviewDecisions,
+          handoverRecords: s.handoverRecords,
+          nameResolution: s.supplierNameResolution,
+          riskRules: s.supplierRiskRules,
+        });
+        return filterSupplierRiskProfiles(
+          profiles,
+          s.supplierRiskFilter,
+          s.arrivalBatches,
+          s.reviewDecisions,
+        );
+      },
+
+      setSupplierRiskRules: (rules: Partial<SupplierRiskRules> | SupplierRiskLevelRule[]) => {
+        const s = get();
+        const before = s.supplierRiskRules;
+        let merged: SupplierRiskRules;
+        if (Array.isArray(rules)) {
+          merged = { ...before, levels: rules };
+        } else {
+          merged = { ...before, ...rules };
+        }
+        set({ supplierRiskRules: merged });
+        saveSupplierRiskRules(merged);
+
+        const changes: string[] = [];
+        if (Array.isArray(rules)) {
+          changes.push(`等级规则已更新，共 ${rules.length} 级`);
+        } else {
+          for (const k of Object.keys(rules) as (keyof SupplierRiskRules)[]) {
+            if (k === 'levels') continue;
+            const bv = before[k];
+            const mv = merged[k];
+            if (bv !== mv) changes.push(`${k}: ${bv} → ${mv}`);
+          }
+        }
+        if (changes.length > 0) {
+          appendAudit(
+            createAuditLog(
+              'change_supplier_risk_rules',
+              s.currentReviewer || '未知复核人',
+              `供应商风险规则变更：${changes.join('；')}`,
+              { before, after: merged, changes },
+            ),
+          );
+        }
+      },
+
+      resetSupplierRiskRules: () => {
+        const s = get();
+        const before = s.supplierRiskRules;
+        const reset = { ...DEFAULT_SUPPLIER_RISK_RULES, levels: DEFAULT_SUPPLIER_RISK_RULES.levels.map((l) => ({ ...l, conditions: { ...l.conditions } })) };
+        set({ supplierRiskRules: reset });
+        saveSupplierRiskRules(reset);
+        appendAudit(
+          createAuditLog(
+            'change_supplier_risk_rules',
+            s.currentReviewer || '未知复核人',
+            '供应商风险规则已恢复默认值',
+            { before, after: reset },
+          ),
+        );
+      },
+
+      setSupplierRiskFilter: (filters: Partial<SupplierRiskFilterState>) =>
+        set((s) => ({ supplierRiskFilter: { ...s.supplierRiskFilter, ...filters } })),
+
+      resolveSupplierNameConflict: (conflictId: string, merge: boolean, canonicalName?: string) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const resolution = s.supplierNameResolution;
+        const conflict = resolution.conflicts.find((c) => c.id === conflictId);
+        if (!conflict) return;
+
+        const newResolution: SupplierNameResolutionMap = {
+          ...resolution,
+          variantToCanonical: { ...resolution.variantToCanonical },
+          conflicts: resolution.conflicts.map((c) => {
+            if (c.id !== conflictId) return c;
+            const mergedTo = merge ? (canonicalName || c.variants[0]) : undefined;
+            return {
+              ...c,
+              resolved: true,
+              mergedTo,
+              resolvedAt: new Date().toISOString(),
+              resolvedBy: reviewer,
+            };
+          }),
+        };
+
+        if (merge) {
+          const target = canonicalName || conflict.variants[0];
+          for (const variant of conflict.variants) {
+            const normalized = normalizeSupplierName(variant);
+            newResolution.variantToCanonical[normalized] = target;
+          }
+        }
+
+        set({ supplierNameResolution: newResolution });
+        saveSupplierNameResolution(newResolution);
+
+        appendAudit(
+          createAuditLog(
+            merge ? 'supplier_name_merge_confirmed' : 'supplier_name_merge_kept_separate',
+            reviewer,
+            merge
+              ? `已合并供应商名称冲突：${conflict.variants.join(' / ')} → ${canonicalName || conflict.variants[0]}`
+              : `已确认保留独立供应商：${conflict.variants.join(' / ')}`,
+            {
+              conflictId,
+              normalizedKey: conflict.normalizedKey,
+              variants: conflict.variants,
+              merge,
+              mergedTo: canonicalName,
+            },
+          ),
+        );
+      },
+
+      exportSupplierRiskData: (format, profiles) => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        const data = profiles ?? s.computeSupplierRiskProfiles();
+        const exportTime = new Date().toISOString();
+        const ts = exportTime.replace(/[:.]/g, '-').slice(0, 19);
+
+        const ctx = {
+          filterSnapshot: s.supplierRiskFilter,
+          rulesSnapshot: s.supplierRiskRules,
+          nameResolutionSnapshot: s.supplierNameResolution,
+          auditLogs: s.auditLogs.filter(
+            (l) =>
+              l.action.startsWith('change_supplier') ||
+              l.action.startsWith('supplier_name') ||
+              l.action === 'export_supplier_risk',
+          ).slice(0, 100),
+          exportTime,
+          exportedBy: reviewer,
+        };
+
+        appendAudit(
+          createAuditLog(
+            'export_supplier_risk',
+            reviewer,
+            `导出供应商风险画像：${format.toUpperCase()}，共 ${data.length} 个供应商`,
+            { format, profileCount: data.length },
+          ),
+        );
+
+        if (format === 'csv') {
+          const content = buildSupplierRiskExportCsv(data, ctx);
+          downloadFile(content, `supplier-risk-${ts}.csv`, 'text/csv;charset=utf-8');
+        } else {
+          const content = buildSupplierRiskExportJson(data, ctx);
+          downloadFile(content, `supplier-risk-${ts}.json`, 'application/json');
+        }
+      },
     });
   },
   {
@@ -977,6 +1183,7 @@ export const useAppStore = create<AppState>()(
         handoverRecords: state.handoverRecords,
         handoverLocks: state.handoverLocks,
         handoverFilter: state.handoverFilter,
+        supplierRiskFilter: state.supplierRiskFilter,
       }),
     },
   ),

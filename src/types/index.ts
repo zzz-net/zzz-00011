@@ -44,7 +44,11 @@ export type AuditAction =
   | 'accept_handover'
   | 'return_handover'
   | 'complete_handover'
-  | 'handover_conflict';
+  | 'handover_conflict'
+  | 'change_supplier_risk_rules'
+  | 'supplier_name_merge_confirmed'
+  | 'supplier_name_merge_kept_separate'
+  | 'export_supplier_risk';
 
 export interface AuditLog {
   id: string;
@@ -267,6 +271,10 @@ export interface AppState {
   handoverLocks: HandoverLock[];
   handoverFilter: HandoverFilterState;
 
+  supplierRiskRules: SupplierRiskRules;
+  supplierNameResolution: SupplierNameResolutionMap;
+  supplierRiskFilter: SupplierRiskFilterState;
+
   importArrivals: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
   importTemperatureLogs: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
   importManualReviews: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
@@ -304,6 +312,13 @@ export interface AppState {
   acquireItemLock: (handoverId: string, anomalyId: string) => { success: boolean; message: string; lockedBy?: string };
   releaseItemLock: (handoverId: string, anomalyId: string) => void;
   exportHandoverData: (format: 'json' | 'csv', handoverIds?: string[]) => void;
+
+  computeSupplierRiskProfiles: () => SupplierRiskProfile[];
+  setSupplierRiskRules: (rules: Partial<SupplierRiskRules> | SupplierRiskLevelRule[]) => void;
+  resetSupplierRiskRules: () => void;
+  setSupplierRiskFilter: (filters: Partial<SupplierRiskFilterState>) => void;
+  resolveSupplierNameConflict: (conflictId: string, merge: boolean, canonicalName?: string) => void;
+  exportSupplierRiskData: (format: 'json' | 'csv', profiles?: SupplierRiskProfile[]) => void;
 }
 
 export const REVIEW_RULES_RANGES: Record<keyof ReviewRules, RuleFieldRange> = {
@@ -434,6 +449,147 @@ export interface SavedFieldMappings {
   log?: FileTypeMappingsWithHeaders;
   review?: FileTypeMappingsWithHeaders;
   updatedAt?: string;
+}
+
+export type SupplierRiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical';
+
+export interface SupplierRiskLevelRule {
+  level: SupplierRiskLevel;
+  label: string;
+  color: string;
+  conditions: {
+    minDangerAnomalies?: number;
+    minTotalAnomalies?: number;
+    minOvertempCount?: number;
+    minMissingLogCount?: number;
+    minUnregisteredCount?: number;
+    minReviewConflictCount?: number;
+    minPendingHandovers?: number;
+    minTrendIncrease?: number;
+  };
+}
+
+export interface SupplierRiskRules {
+  version: number;
+  levels: SupplierRiskLevelRule[];
+  trendWindowDays: number;
+}
+
+export const SUPPLIER_RISK_STORAGE_KEY = 'cold-chain-supplier-risk-rules-v1';
+
+export const DEFAULT_SUPPLIER_RISK_RULES: SupplierRiskRules = {
+  version: 1,
+  trendWindowDays: 7,
+  levels: [
+    {
+      level: 'safe',
+      label: '正常',
+      color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+      conditions: { minTotalAnomalies: 0 },
+    },
+    {
+      level: 'low',
+      label: '低风险',
+      color: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+      conditions: { minTotalAnomalies: 1 },
+    },
+    {
+      level: 'medium',
+      label: '中风险',
+      color: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      conditions: { minTotalAnomalies: 3, minDangerAnomalies: 1 },
+    },
+    {
+      level: 'high',
+      label: '高风险',
+      color: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+      conditions: { minDangerAnomalies: 2, minTotalAnomalies: 5 },
+    },
+    {
+      level: 'critical',
+      label: '严重',
+      color: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      conditions: { minDangerAnomalies: 4, minTotalAnomalies: 8, minPendingHandovers: 2 },
+    },
+  ],
+};
+
+export const SUPPLIER_RISK_LEVEL_LABELS: Record<SupplierRiskLevel, string> = {
+  safe: '正常',
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+  critical: '严重',
+};
+
+export interface SupplierNameConflict {
+  id: string;
+  normalizedKey: string;
+  variants: string[];
+  batchIdsByVariant: Record<string, string[]>;
+  resolved: boolean;
+  mergedTo?: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+}
+
+export interface SupplierNameResolutionMap {
+  variantToCanonical: Record<string, string>;
+  conflicts: SupplierNameConflict[];
+  updatedAt?: string;
+}
+
+export const SUPPLIER_NAME_RESOLUTION_STORAGE_KEY = 'cold-chain-supplier-name-resolution-v1';
+
+export interface SupplierRiskTrendPoint {
+  date: string;
+  anomalyCount: number;
+  dangerCount: number;
+}
+
+export interface SupplierRiskBatchDetail {
+  batchId: string;
+  productName?: string;
+  arrivalTime?: string;
+  anomalyIds: string[];
+  anomalyTypes: AnomalyType[];
+  sourceRows: number[];
+  reviewConclusion?: ReviewConclusion;
+}
+
+export interface SupplierRiskProfile {
+  supplierName: string;
+  canonicalName: string;
+  displayName: string;
+  batchCount: number;
+  overtempCount: number;
+  missingLogCount: number;
+  unregisteredCount: number;
+  reviewConflictCount: number;
+  totalAnomalies: number;
+  dangerAnomalies: number;
+  warningAnomalies: number;
+  pendingHandoverCount: number;
+  riskLevel: SupplierRiskLevel;
+  riskScore: number;
+  trend: SupplierRiskTrendPoint[];
+  trendDirection: 'improving' | 'worsening' | 'stable' | 'insufficient';
+  lastAnomalyAt?: string;
+  batches: SupplierRiskBatchDetail[];
+  nameVariants: string[];
+  hasUnresolvedNameConflict: boolean;
+  missingSupplierBatches: string[];
+}
+
+export interface SupplierRiskFilterState {
+  timeRangeStart: string;
+  timeRangeEnd: string;
+  anomalyTypes: AnomalyType[];
+  reviewStatuses: ReviewConclusion[];
+  riskLevels: SupplierRiskLevel[];
+  keyword: string;
+  onlyWithPendingHandovers: boolean;
+  onlyWithNameConflicts: boolean;
 }
 
 export const FIELD_LABELS: Record<FileType, Record<string, string>> = {
