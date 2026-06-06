@@ -199,6 +199,58 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
           </div>
 
           <div className="mt-6 rounded-lg border border-slate-700/60 bg-slate-800/30 p-4">
+            <h3 className="text-sm font-semibold text-slate-100">规则配置包使用说明</h3>
+            <div className="mt-3 space-y-3 text-[11px] text-slate-400">
+              <p className="leading-relaxed">
+                规则配置包用于将当前的复核规则阈值导出为 JSON 文件，方便在不同浏览器、不同人员之间复用和共享一致的判定标准。
+              </p>
+              <div>
+                <p className="mb-1 font-medium text-slate-300">导出规则包：</p>
+                <p>在「复核规则配置」面板右上角点击「导出规则包」，系统将下载一个 <code className="rounded bg-slate-900/60 px-1 py-0.5 font-mono text-slate-300">review-rules-*.json</code> 文件，包含当前所有阈值、版本号、导出时间和导出人。</p>
+              </div>
+              <div>
+                <p className="mb-1 font-medium text-slate-300">导入规则包：</p>
+                <p>点击「导入规则包」选择 JSON 文件，系统会先进行预览：</p>
+                <ul className="ml-4 mt-1 list-disc space-y-0.5">
+                  <li>显示文件版本、导出时间、导出人等元信息</li>
+                  <li>以表格对比「当前值」和「导入值」，高亮差异项</li>
+                  <li>检测到缺字段、非数字、超出合理范围或版本不兼容时，「应用」按钮将禁用并给出原因</li>
+                  <li>若与当前规则存在冲突（至少一个阈值不同），按钮变为橙色「确认变更并应用」，必须明确确认才会覆盖</li>
+                </ul>
+              </div>
+              <div>
+                <p className="mb-1 font-medium text-slate-300">规则包 JSON 结构示例：</p>
+                <pre className="overflow-auto rounded-md border border-slate-700/60 bg-slate-950/60 p-2.5 font-mono text-[10px] leading-relaxed text-slate-300">{`{
+  "packageType": "review-rules",
+  "version": 1,
+  "exportedAt": "2026-06-06T10:00:00.000Z",
+  "exportedBy": "质控员",
+  "rules": {
+    "overtempThreshold": 0,
+    "missingLogIntervalMin": 30,
+    "overtempDurationDangerMin": 30,
+    "overtempDeltaDanger": 5,
+    "missingLogGapDangerMin": 120
+  }
+}`}</pre>
+              </div>
+              <div>
+                <p className="mb-1 font-medium text-slate-300">字段合理范围：</p>
+                <ul className="ml-4 list-disc space-y-0.5 font-mono text-[10.5px]">
+                  <li>overtempThreshold: [0, 20] °C</li>
+                  <li>missingLogIntervalMin: [1, 600] 分钟</li>
+                  <li>overtempDurationDangerMin: [1, 600] 分钟</li>
+                  <li>overtempDeltaDanger: [0.5, 50] °C</li>
+                  <li>missingLogGapDangerMin: [5, 1440] 分钟</li>
+                </ul>
+              </div>
+              <p className="leading-relaxed text-sky-300">
+                <strong className="text-sky-300">提示：</strong>导入成功后系统会立即重新计算所有异常列表、指标卡和筛选结果，并在审计日志中记录操作者、来源文件以及变更前后的完整阈值快照。预览结果即使刷新页面也不会丢失。
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 rounded-lg border border-slate-700/60 bg-slate-800/30 p-4">
             <h3 className="text-sm font-semibold text-slate-100">CSV 文件格式规范</h3>
             <div className="mt-3 space-y-3 text-[11px] text-slate-400">
               <div>

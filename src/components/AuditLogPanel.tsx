@@ -17,6 +17,8 @@ const ALL_ACTIONS: AuditAction[] = [
   'undo_review',
   'clear_all',
   'export_data',
+  'export_rules_package',
+  'import_rules_package',
 ];
 
 function fmtDateTime(iso: string): string {
@@ -37,6 +39,8 @@ const ACTION_COLOR: Record<AuditAction, string> = {
   undo_review: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
   clear_all: 'bg-red-500/15 text-red-300 border-red-500/30',
   export_data: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
+  export_rules_package: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  import_rules_package: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
 };
 
 const AuditLogPanel: FC = () => {

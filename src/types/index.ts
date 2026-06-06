@@ -1,5 +1,7 @@
 export const PERSIST_STORAGE_KEY = 'cold-chain-dashboard-v2';
 
+export const RULES_PACKAGE_VERSION = 1;
+
 export type FileType = 'arrival' | 'log' | 'review';
 
 export type AnomalyType = 'overtemp' | 'missing_log' | 'unregistered' | 'review_conflict';
@@ -33,7 +35,9 @@ export type AuditAction =
   | 'review_decision'
   | 'undo_review'
   | 'clear_all'
-  | 'export_data';
+  | 'export_data'
+  | 'export_rules_package'
+  | 'import_rules_package';
 
 export interface AuditLog {
   id: string;
@@ -206,4 +210,83 @@ export interface AppState {
   setSelectedBatchId: (batchId: string | null) => void;
   exportData: (format: 'json' | 'csv') => void;
   clearAll: () => void;
+
+  rulesPackagePreview: RulesPackagePreviewState | null;
+  exportRulesPackage: () => void;
+  previewRulesPackage: (file: File) => Promise<RulesPackagePreviewResult>;
+  applyRulesPackage: (confirmed: boolean) => RulesPackageApplyResult;
+  clearRulesPackagePreview: () => void;
+}
+
+export interface RuleFieldRange {
+  min: number;
+  max: number;
+}
+
+export const REVIEW_RULES_RANGES: Record<keyof ReviewRules, RuleFieldRange> = {
+  overtempThreshold: { min: 0, max: 20 },
+  missingLogIntervalMin: { min: 1, max: 600 },
+  overtempDurationDangerMin: { min: 1, max: 600 },
+  overtempDeltaDanger: { min: 0.5, max: 50 },
+  missingLogGapDangerMin: { min: 5, max: 1440 },
+};
+
+export const REVIEW_RULES_LABELS: Record<keyof ReviewRules, string> = {
+  overtempThreshold: '超温判定阈值(°C)',
+  missingLogIntervalMin: '日志缺失间隔(分钟)',
+  overtempDurationDangerMin: '超温时长严重边界(分钟)',
+  overtempDeltaDanger: '超温偏差严重边界(°C)',
+  missingLogGapDangerMin: '缺日志严重边界(分钟)',
+};
+
+export interface RulesPackage {
+  packageType: 'review-rules';
+  version: number;
+  exportedAt: string;
+  exportedBy?: string;
+  rules: ReviewRules;
+  description?: string;
+}
+
+export type RuleValidationIssueType =
+  | 'missing_field'
+  | 'non_numeric'
+  | 'out_of_range'
+  | 'version_incompatible';
+
+export interface RuleValidationIssue {
+  field?: keyof ReviewRules;
+  type: RuleValidationIssueType;
+  message: string;
+}
+
+export interface RuleDiffItem {
+  field: keyof ReviewRules;
+  currentValue: number;
+  importedValue: number;
+  range: RuleFieldRange;
+}
+
+export interface RulesPackagePreviewState {
+  fileName: string;
+  packageData: RulesPackage;
+  diffs: RuleDiffItem[];
+  issues: RuleValidationIssue[];
+  hasConflicts: boolean;
+  canApply: boolean;
+  timestamp: string;
+}
+
+export interface RulesPackagePreviewResult {
+  success: boolean;
+  message: string;
+  preview?: RulesPackagePreviewState;
+  issues?: RuleValidationIssue[];
+}
+
+export interface RulesPackageApplyResult {
+  success: boolean;
+  message: string;
+  appliedRules?: ReviewRules;
+  beforeRules?: ReviewRules;
 }

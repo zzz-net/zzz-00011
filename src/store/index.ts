@@ -13,6 +13,8 @@ import type {
   ReviewDecision,
   ReviewHistoryEntry,
   ReviewRules,
+  RulesPackageApplyResult,
+  RulesPackagePreviewResult,
   TemperatureLog,
 } from '@/types';
 import { DEFAULT_REVIEW_RULES, PERSIST_STORAGE_KEY } from '@/types';
@@ -30,6 +32,10 @@ import {
 } from '@/services/csvService';
 import { detectAllAnomalies } from '@/services/anomalyEngine';
 import { sampleArrivals, sampleLogs, sampleReviews } from '@/data/sampleData';
+import {
+  exportRulesPackageFile,
+  previewRulesPackage as previewRulesPackageService,
+} from '@/services/rulesPackage';
 
 const initialFilters: FilterState = {
   batchId: '',
@@ -84,6 +90,7 @@ export const useAppStore = create<AppState>()(
         filters: initialFilters,
         auditLogFilter: initialAuditLogFilter,
         selectedBatchId: null,
+        rulesPackagePreview: null,
 
         importArrivals: async (file: File): Promise<ImportResult> => {
         const existing = get().arrivalBatches;
@@ -427,7 +434,90 @@ export const useAppStore = create<AppState>()(
           importRecords: [],
           filters: initialFilters,
           selectedBatchId: null,
+          rulesPackagePreview: null,
         });
+      },
+
+      exportRulesPackage: () => {
+        const s = get();
+        const reviewer = s.currentReviewer || '未知复核人';
+        appendAudit(
+          createAuditLog(
+            'export_rules_package',
+            reviewer,
+            '导出复核规则配置包',
+            { reviewRules: s.reviewRules },
+          ),
+        );
+        exportRulesPackageFile(s.reviewRules, reviewer);
+      },
+
+      previewRulesPackage: async (file: File): Promise<RulesPackagePreviewResult> => {
+        const s = get();
+        const result = await previewRulesPackageService(file, s.reviewRules);
+        if (result.preview) {
+          set({ rulesPackagePreview: result.preview });
+        }
+        return result;
+      },
+
+      applyRulesPackage: (confirmed: boolean): RulesPackageApplyResult => {
+        const s = get();
+        const preview = s.rulesPackagePreview;
+
+        if (!preview) {
+          return { success: false, message: '没有待确认的规则包预览，请先选择文件' };
+        }
+        if (!preview.canApply) {
+          return { success: false, message: '规则包存在阻断性问题，无法应用' };
+        }
+        if (preview.hasConflicts && !confirmed) {
+          return {
+            success: false,
+            message: `检测到 ${preview.diffs.length} 处与当前规则不同，请确认后应用`,
+          };
+        }
+
+        const before = s.reviewRules;
+        const after = preview.packageData.rules;
+        const reviewer = s.currentReviewer || '未知复核人';
+        const changes = preview.diffs.map(
+          (d) => `${d.field}: ${d.currentValue} → ${d.importedValue}`,
+        );
+
+        set({ reviewRules: after, rulesPackagePreview: null });
+
+        appendAudit(
+          createAuditLog(
+            'import_rules_package',
+            reviewer,
+            `导入规则配置包 ${preview.fileName}：${changes.join('；') || '无变更'}`,
+            {
+              fileName: preview.fileName,
+              before,
+              after,
+              changes,
+              packageVersion: preview.packageData.version,
+              exportedBy: preview.packageData.exportedBy,
+              exportedAt: preview.packageData.exportedAt,
+            },
+          ),
+        );
+
+        get().detectAnomalies();
+
+        return {
+          success: true,
+          message: changes.length > 0
+            ? `规则已更新：${changes.length} 处变更`
+            : '规则与当前配置一致，无需变更',
+          appliedRules: after,
+          beforeRules: before,
+        };
+      },
+
+      clearRulesPackagePreview: () => {
+        set({ rulesPackagePreview: null });
       },
     });
   },
@@ -446,6 +536,7 @@ export const useAppStore = create<AppState>()(
         currentReviewer: state.currentReviewer,
         filters: state.filters,
         auditLogFilter: state.auditLogFilter,
+        rulesPackagePreview: state.rulesPackagePreview,
       }),
     },
   ),

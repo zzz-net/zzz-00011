@@ -365,4 +365,6 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   undo_review: '撤销复核决策',
   clear_all: '清空所有数据',
   export_data: '导出数据',
+  export_rules_package: '导出规则配置包',
+  import_rules_package: '导入规则配置包',
 };
