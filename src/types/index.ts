@@ -1,3 +1,5 @@
+export const PERSIST_STORAGE_KEY = 'cold-chain-dashboard-v2';
+
 export type FileType = 'arrival' | 'log' | 'review';
 
 export type AnomalyType = 'overtemp' | 'missing_log' | 'unregistered' | 'review_conflict';

@@ -294,9 +294,16 @@ BATCH-BAD2,2026-06-06 08:10:00,4.5
 
 ## 数据持久化
 
-- 所有数据存储在浏览器 `localStorage`，key：`cold-chain-dashboard-v1`
-- 包含：到货清单、温度日志、人工复核记录、异常检测结果、复核决策、导入记录、复核人、筛选条件
+- 所有数据存储在浏览器 `localStorage`，key：`cold-chain-dashboard-v2`（代码常量见 `src/types/index.ts` 的 `PERSIST_STORAGE_KEY`）
+- 包含：到货清单、温度日志、人工复核记录、异常检测结果、复核决策、复核历史、审计日志、复核规则、导入记录、复核人、异常筛选条件、审计筛选条件
 - 点击「清空所有数据」按钮可重置（需二次确认）
+
+### 版本迁移边界（v1 → v2）
+
+- **v1**：早期版本使用 key `cold-chain-dashboard-v1`，仅保存基础业务数据（到货/日志/复核/异常/决策/导入记录/复核人/筛选）
+- **v2**（当前）：key 升级为 `cold-chain-dashboard-v2`，新增持久化字段：`reviewHistory`、`auditLogs`、`reviewRules`、`auditLogFilter`
+- **自动迁移**：系统**未实现** v1 → v2 的自动迁移逻辑。升级后旧 key 下的数据仍保留在浏览器中，但不会被自动读取
+- **手动迁移建议**：升级前在 v1 页面执行「导出 JSON」备份，升级到 v2 后如需恢复历史数据，可通过导入 CSV 的方式重新载入
 
 ---
 

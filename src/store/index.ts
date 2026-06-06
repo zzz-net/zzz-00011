@@ -15,7 +15,7 @@ import type {
   ReviewRules,
   TemperatureLog,
 } from '@/types';
-import { DEFAULT_REVIEW_RULES } from '@/types';
+import { DEFAULT_REVIEW_RULES, PERSIST_STORAGE_KEY } from '@/types';
 import {
   buildExportCsv,
   buildExportJson,
@@ -432,7 +432,7 @@ export const useAppStore = create<AppState>()(
     });
   },
   {
-      name: 'cold-chain-dashboard-v2',
+      name: PERSIST_STORAGE_KEY,
       partialize: (state) => ({
         arrivalBatches: state.arrivalBatches,
         temperatureLogs: state.temperatureLogs,

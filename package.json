@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "eslint . && node scripts/check-persist-key.mjs",
+    "check:persist-key": "node scripts/check-persist-key.mjs",
     "preview": "vite preview",
     "check": "tsc -b --noEmit"
   },

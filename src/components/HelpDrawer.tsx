@@ -145,7 +145,7 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
           <div className="mb-5 rounded-md border border-sky-500/20 bg-sky-500/5 p-3 text-[11px] leading-relaxed text-sky-200">
             <strong className="text-sky-300">提示：</strong>
             点击顶部「加载样例数据」可一键加载包含上述所有异常类型的演示数据，快速体验看板功能。
-            数据完全存储于浏览器 localStorage，刷新页面不会丢失。
+            数据完全存储于浏览器 localStorage（key：<code className="rounded bg-slate-900/60 px-1 py-0.5 text-sky-100">cold-chain-dashboard-v2</code>），刷新页面不会丢失。
           </div>
 
           <div className="space-y-5">
