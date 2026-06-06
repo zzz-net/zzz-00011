@@ -1,4 +1,4 @@
-import { Search, X, RotateCcw, Download, FileJson, FileSpreadsheet } from 'lucide-react';
+import { Search, X, RotateCcw, FileJson, FileSpreadsheet } from 'lucide-react';
 import { useAppStore, applyFilters } from '@/store';
 import { ANOMALY_TYPE_LABEL, CONCLUSION_LABEL } from '@/services/anomalyEngine';
 import type { FC } from 'react';

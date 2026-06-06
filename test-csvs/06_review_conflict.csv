@@ -1,0 +1,3 @@
+batchId,reviewer,conclusion,remark,reviewTime
+BATCH-E2E-001,张三,release,初检合格,2026-06-06 15:00:00
+BATCH-E2E-001,李四,quarantine,怀疑超标,2026-06-06 15:30:00

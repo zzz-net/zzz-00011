@@ -48,10 +48,7 @@ const AnomalyTable: FC<AnomalyTableProps> = ({ onOpenReview }) => {
     anomalies,
     reviewDecisions,
     arrivalBatches,
-    temperatureLogs,
-    manualReviews,
     filters,
-    currentReviewer,
     setReviewDecision,
   } = useAppStore();
 
@@ -239,7 +236,7 @@ const AnomalyTable: FC<AnomalyTableProps> = ({ onOpenReview }) => {
 };
 
 const AnomalyDetail: FC<{ anomaly: Anomaly; batchProductName?: string }> = ({ anomaly }) => {
-  const { temperatureLogs, manualReviews, arrivalBatches } = useAppStore();
+  const { temperatureLogs, manualReviews } = useAppStore();
   const logs = temperatureLogs.filter((l) => l.batchId === anomaly.batchId);
 
   if (anomaly.type === 'overtemp' && anomaly.detail.overtimeIntervals) {
@@ -424,7 +421,7 @@ const TemperatureTimeline: FC<{ batchId: string }> = ({ batchId }) => {
           }}
         />
         <div className="relative flex h-40 items-end gap-0.5">
-          {logs.map((l, i) => {
+          {logs.map((l) => {
             const h = ((l.temperature - minT) / range) * 100;
             const over = l.temperature > batch.requiredTempMax || l.temperature < batch.requiredTempMin;
             return (
