@@ -30,6 +30,8 @@ export type AuditAction =
   | 'import_arrival'
   | 'import_log'
   | 'import_review'
+  | 'import_blocked'
+  | 'field_mapping_changed'
   | 'load_sample'
   | 'change_rules'
   | 'review_decision'
@@ -265,9 +267,10 @@ export interface AppState {
   handoverLocks: HandoverLock[];
   handoverFilter: HandoverFilterState;
 
-  importArrivals: (file: File) => Promise<ImportResult>;
-  importTemperatureLogs: (file: File) => Promise<ImportResult>;
-  importManualReviews: (file: File) => Promise<ImportResult>;
+  importArrivals: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
+  importTemperatureLogs: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
+  importManualReviews: (file: File, fieldMappings?: FieldMapping[]) => Promise<ImportResult>;
+  previewFieldMapping: (file: File, fileType: FileType) => Promise<FieldMappingPreview>;
   loadSampleData: () => void;
   detectAnomalies: () => void;
   setReviewDecision: (batchId: string, conclusion: ReviewConclusion, remark: string) => void;
@@ -363,3 +366,87 @@ export interface RulesPackagePreviewResult {
   preview?: RulesPackagePreviewState;
   issues?: RuleValidationIssue[];
 }
+
+export interface FieldMapping {
+  targetField: string;
+  sourceColumn: string | null;
+  isRequired: boolean;
+  matchedAutomatically: boolean;
+  matchReason?: string;
+}
+
+export interface ColumnMappingSnapshot {
+  targetField: string;
+  sourceColumn: string | null;
+}
+
+export interface FieldMappingPreview {
+  fileType: FileType;
+  fileName: string;
+  headers: string[];
+  previewRows: Record<string, unknown>[];
+  mappings: FieldMapping[];
+  conflicts: string[];
+  missingRequired: string[];
+  invalidMappings: string[];
+  canProceed: boolean;
+  savedMappingAvailable: boolean;
+  savedMappingOutdated: boolean;
+  outdatedFields?: string[];
+  mappingSnapshot?: ColumnMappingSnapshot[];
+}
+
+export interface SavedFieldMappings {
+  arrival?: ColumnMappingSnapshot[];
+  log?: ColumnMappingSnapshot[];
+  review?: ColumnMappingSnapshot[];
+  updatedAt?: string;
+}
+
+export const FIELD_LABELS: Record<FileType, Record<string, string>> = {
+  arrival: {
+    batchId: '批次号',
+    productName: '产品名称',
+    arrivalTime: '到货时间',
+    requiredTempMin: '要求最低温度',
+    requiredTempMax: '要求最高温度',
+    supplier: '供应商',
+    quantity: '数量',
+  },
+  log: {
+    batchId: '批次号',
+    timestamp: '记录时间',
+    temperature: '温度值',
+  },
+  review: {
+    batchId: '批次号',
+    reviewer: '复核人',
+    conclusion: '复核结论',
+    remark: '备注',
+    reviewTime: '复核时间',
+  },
+};
+
+export const FIELD_ALIASES: Record<FileType, Record<string, string[]>> = {
+  arrival: {
+    batchId: ['batchId', 'batch_id', 'batch id', '批次号', '批次', '批号', 'BatchID', 'Batch Id', 'BATCH_ID'],
+    productName: ['productName', 'product_name', 'product name', '产品名称', '品名', '产品', 'Product Name', 'PRODUCT_NAME'],
+    arrivalTime: ['arrivalTime', 'arrival_time', 'arrival time', '到货时间', '到达时间', '入库时间', 'Arrival Time', 'ARRIVAL_TIME'],
+    requiredTempMin: ['requiredTempMin', 'required_temp_min', 'required temp min', '要求最低温度', '最低温度', '温度下限', 'tempMin', 'temp_min', 'Required Temp Min', 'REQUIRED_TEMP_MIN'],
+    requiredTempMax: ['requiredTempMax', 'required_temp_max', 'required temp max', '要求最高温度', '最高温度', '温度上限', 'tempMax', 'temp_max', 'Required Temp Max', 'REQUIRED_TEMP_MAX'],
+    supplier: ['supplier', '供应商', '供货商', 'Supplier', 'SUPPLIER'],
+    quantity: ['quantity', '数量', 'Qty', 'qty', 'QUANTITY'],
+  },
+  log: {
+    batchId: ['batchId', 'batch_id', 'batch id', '批次号', '批次', '批号', 'BatchID', 'Batch Id', 'BATCH_ID'],
+    timestamp: ['timestamp', 'time_stamp', 'time', '记录时间', '时间', '采集时间', 'Time', 'TIME', 'TIMESTAMP'],
+    temperature: ['temperature', 'temp', '温度值', '温度', 'Temperature', 'TEMP', 'TEMPERATURE'],
+  },
+  review: {
+    batchId: ['batchId', 'batch_id', 'batch id', '批次号', '批次', '批号', 'BatchID', 'Batch Id', 'BATCH_ID'],
+    reviewer: ['reviewer', '复核人', '审核人', 'Reviewer', 'REVIEWER'],
+    conclusion: ['conclusion', '复核结论', '结论', '审核结论', 'Conclusion', 'CONCLUSION'],
+    remark: ['remark', '备注', '说明', 'Remark', 'REMARK'],
+    reviewTime: ['reviewTime', 'review_time', 'review time', '复核时间', '审核时间', 'Review Time', 'REVIEW_TIME'],
+  },
+};

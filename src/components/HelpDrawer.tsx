@@ -275,6 +275,60 @@ const HelpDrawer: FC<HelpDrawerProps> = ({ open, onClose }) => {
             </div>
           </div>
 
+          <div className="mt-6 rounded-lg border border-purple-500/30 bg-purple-500/5 p-4">
+            <h3 className="text-sm font-semibold text-slate-100">字段映射预览功能说明</h3>
+            <div className="mt-3 space-y-3 text-[11px] text-slate-400">
+              <p className="leading-relaxed">
+                导入到货清单、温度日志、人工复核记录前，系统会先弹出「字段映射预览」面板，支持中文表头、大小写和空格差异自动识别，无需手动修改 CSV 文件。
+              </p>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">1. 自动匹配规则：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>三级匹配策略：精确别名匹配 → 归一化别名匹配（trim、小写、去空格/下划线/连字符）→ 模糊包含匹配</li>
+                  <li>常见中文表头自动识别（如「批次号」「产品名称」「采集时间」「温度」「复核人」「结论」等）</li>
+                  <li>大小写不敏感：BatchId / batchid / BATCHID 均可识别</li>
+                  <li>空格/下划线/连字符不敏感：product_name / productName / product name / product-name 均可识别</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">2. 手动选列：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>自动匹配结果可在下拉菜单中手动修改或清空</li>
+                  <li>未匹配的字段显示黄色警告，必填字段缺失会阻断导入</li>
+                  <li>可点击「自动匹配」按钮重新根据当前表头执行匹配</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">3. 校验规则：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>必填字段缺失：红色背景 + 具体说明，「确认导入」按钮禁用</li>
+                  <li>列映射冲突：同一 CSV 列映射到多个目标字段时，橙色警告行提示，「确认导入」按钮禁用，不静默覆盖</li>
+                  <li>非必填字段缺失：黄色提示，不阻断导入</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">4. 本地持久化：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>确认后的映射按文件类型独立保存到 localStorage（key: <code className="rounded bg-slate-900/60 px-1 py-0.5 font-mono text-purple-200">cold-chain-field-mappings-v1</code>）</li>
+                  <li>刷新页面或重启浏览器后映射仍然可用，可点击「恢复上次映射」快速载入</li>
+                  <li>下次导入 CSV 表头发生变化时，自动提示失效的映射项并允许重新选择</li>
+                </ul>
+              </div>
+
+              <div>
+                <p className="mb-1 font-medium text-slate-300">5. 审计与导出：</p>
+                <ul className="ml-4 list-disc space-y-0.5">
+                  <li>导入成功、阻断（必填缺失/冲突）、映射变更均会写入审计日志</li>
+                  <li>导出 JSON 时自动附带字段映射快照，便于追溯数据来源的列对应关系</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
           <div className="mt-6 rounded-lg border border-slate-700/60 bg-slate-800/30 p-4">
             <h3 className="text-sm font-semibold text-slate-100">复核交接班功能使用说明</h3>
             <div className="mt-3 space-y-3 text-[11px] text-slate-400">

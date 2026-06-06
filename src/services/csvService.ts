@@ -14,8 +14,237 @@ import type {
   ReviewRules,
   ReviewHistoryEntry,
   HandoverRecord,
+  FieldMapping,
+  FieldMappingPreview,
+  ColumnMappingSnapshot,
+  SavedFieldMappings,
 } from '@/types';
+import { FIELD_ALIASES, FIELD_LABELS } from '@/types';
 import { AUDIT_ACTION_LABEL, HANDOVER_STATUS_LABEL, ANOMALY_TYPE_LABEL, CONCLUSION_LABEL } from '@/services/anomalyEngine';
+
+const FIELD_MAPPING_STORAGE_KEY = 'cold-chain-field-mappings-v1';
+
+function normalizeHeader(h: string): string {
+  return h.trim().toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+export function autoMatchField(fileType: FileType, headers: string[]): FieldMapping[] {
+  const aliases = FIELD_ALIASES[fileType];
+  const labels = FIELD_LABELS[fileType];
+  const requiredColumns = REQUIRED_COLUMNS[fileType];
+  const targetFields = Object.keys(aliases);
+  const normalizedHeaders = headers.map((h) => ({ original: h, normalized: normalizeHeader(h) }));
+
+  const mappings: FieldMapping[] = targetFields.map((field) => {
+    const fieldAliases = aliases[field];
+    const normalizedAliases = fieldAliases.map(normalizeHeader);
+
+    let matchedColumn: string | null = null;
+    let matchReason: string | undefined;
+
+    for (let headerIdx = 0; headerIdx < normalizedHeaders.length; headerIdx++) {
+      const { original, normalized } = normalizedHeaders[headerIdx];
+      if (normalizedAliases.includes(normalized)) {
+        matchedColumn = original;
+        matchReason = `别名匹配: "${original}" → ${labels[field] || field}`;
+        break;
+      }
+    }
+
+    if (!matchedColumn) {
+      for (let headerIdx = 0; headerIdx < normalizedHeaders.length; headerIdx++) {
+        const { original, normalized } = normalizedHeaders[headerIdx];
+        const nf = normalizeHeader(field);
+        if (normalized.includes(nf) || nf.includes(normalized)) {
+          matchedColumn = original;
+          matchReason = `模糊匹配: "${original}" → "${field}"`;
+          break;
+        }
+      }
+    }
+
+    return {
+      targetField: field,
+      sourceColumn: matchedColumn,
+      isRequired: requiredColumns.includes(field),
+      matchedAutomatically: matchedColumn !== null,
+      matchReason,
+    };
+  });
+
+  return mappings;
+}
+
+export function validateMappings(mappings: FieldMapping[]): {
+  conflicts: string[];
+  missingRequired: string[];
+  invalidMappings: string[];
+  canProceed: boolean;
+} {
+  const conflicts: string[] = [];
+  const missingRequired: string[] = [];
+  const invalidMappings: string[] = [];
+
+  const usedColumns = new Map<string, string[]>();
+  const labelsByField: Record<string, string> = {};
+
+  for (const m of mappings) {
+    if (m.sourceColumn && usedColumns.has(m.sourceColumn)) {
+      const existing = usedColumns.get(m.sourceColumn)!;
+      existing.push(m.targetField);
+    } else if (m.sourceColumn) {
+      usedColumns.set(m.sourceColumn, [m.targetField]);
+    }
+    if (FIELD_LABELS.arrival[m.targetField]) labelsByField[m.targetField] = FIELD_LABELS.arrival[m.targetField];
+    if (FIELD_LABELS.log[m.targetField]) labelsByField[m.targetField] = FIELD_LABELS.log[m.targetField];
+    if (FIELD_LABELS.review[m.targetField]) labelsByField[m.targetField] = FIELD_LABELS.review[m.targetField];
+  }
+
+  for (const [col, fields] of usedColumns.entries()) {
+    if (fields.length > 1) {
+      conflicts.push(`列 "${col}" 被映射到多个字段: ${fields.map((f) => labelsByField[f] || f).join(', ')}`);
+    }
+  }
+
+  for (const m of mappings) {
+    if (m.isRequired && !m.sourceColumn) {
+      missingRequired.push(labelsByField[m.targetField] || m.targetField);
+    }
+  }
+
+  return {
+    conflicts,
+    missingRequired,
+    invalidMappings,
+    canProceed: conflicts.length === 0 && missingRequired.length === 0,
+  };
+}
+
+export function applyMappingToRow(
+  row: Record<string, unknown>,
+  mappings: FieldMapping[],
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const m of mappings) {
+    if (m.sourceColumn && m.sourceColumn in row) {
+      result[m.targetField] = row[m.sourceColumn];
+    }
+  }
+  return result;
+}
+
+export function saveFieldMappings(fileType: FileType, mappings: ColumnMappingSnapshot[]): void {
+  try {
+    const raw = localStorage.getItem(FIELD_MAPPING_STORAGE_KEY);
+    const saved: SavedFieldMappings = raw ? JSON.parse(raw) : {};
+    saved[fileType] = mappings;
+    saved.updatedAt = new Date().toISOString();
+    localStorage.setItem(FIELD_MAPPING_STORAGE_KEY, JSON.stringify(saved));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadFieldMappings(): SavedFieldMappings {
+  try {
+    const raw = localStorage.getItem(FIELD_MAPPING_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getSavedMappingForType(fileType: FileType): ColumnMappingSnapshot[] | undefined {
+  return loadFieldMappings()[fileType];
+}
+
+export function checkSavedMappingOutdated(
+  fileType: FileType,
+  headers: string[],
+): { outdated: boolean; outdatedFields: string[] } {
+  const saved = getSavedMappingForType(fileType);
+  if (!saved || saved.length === 0) {
+    return { outdated: false, outdatedFields: [] };
+  }
+  const headerSet = new Set(headers);
+  const outdatedFields: string[] = [];
+  for (const sm of saved) {
+    if (sm.sourceColumn && !headerSet.has(sm.sourceColumn)) {
+      outdatedFields.push(sm.targetField);
+    }
+  }
+  return { outdated: outdatedFields.length > 0, outdatedFields };
+}
+
+export function applySavedMappings(
+  fileType: FileType,
+  autoMappings: FieldMapping[],
+  headers: string[],
+): { mappings: FieldMapping[]; applied: boolean } {
+  const saved = getSavedMappingForType(fileType);
+  if (!saved || saved.length === 0) {
+    return { mappings: autoMappings, applied: false };
+  }
+  const headerSet = new Set(headers);
+  const merged = autoMappings.map((am) => {
+    const sm = saved.find((s) => s.targetField === am.targetField);
+    if (sm && sm.sourceColumn && headerSet.has(sm.sourceColumn)) {
+      return {
+        ...am,
+        sourceColumn: sm.sourceColumn,
+        matchedAutomatically: false,
+        matchReason: '已应用本地保存的映射配置',
+      };
+    }
+    return am;
+  });
+  return { mappings: merged, applied: true };
+}
+
+export async function buildFieldMappingPreview(
+  file: File,
+  fileType: FileType,
+): Promise<FieldMappingPreview> {
+  const rows = await parseCsvFile(file);
+  const firstRow = rows[0] || {};
+  const headers = Object.keys(firstRow);
+  const previewRows = rows.slice(0, 5);
+  const autoMappings = autoMatchField(fileType, headers);
+  const { mappings: applied } = applySavedMappings(fileType, autoMappings, headers);
+  const savedMapping = getSavedMappingForType(fileType);
+  const { outdated, outdatedFields } = checkSavedMappingOutdated(fileType, headers);
+  const validation = validateMappings(applied);
+  const mappingSnapshot: ColumnMappingSnapshot[] = applied.map((m) => ({
+    targetField: m.targetField,
+    sourceColumn: m.sourceColumn,
+  }));
+
+  return {
+    fileType,
+    fileName: file.name,
+    headers,
+    previewRows,
+    mappings: applied,
+    ...validation,
+    savedMappingAvailable: !!savedMapping,
+    savedMappingOutdated: outdated,
+    outdatedFields,
+    mappingSnapshot,
+  };
+}
+
+function normalizeRowWithMapping(
+  row: Record<string, unknown>,
+  mappings: FieldMapping[],
+): Record<string, unknown> {
+  const mapped = applyMappingToRow(row, mappings);
+  const normalized: Record<string, unknown> = {};
+  for (const key of Object.keys(mapped)) {
+    normalized[key.trim().toLowerCase()] = mapped[key];
+  }
+  return normalized;
+}
+
 
 const REQUIRED_COLUMNS: Record<FileType, string[]> = {
   arrival: ['batchId', 'productName', 'arrivalTime', 'requiredTempMin', 'requiredTempMax'],
@@ -74,13 +303,17 @@ export function parseCsvString(content: string): Record<string, unknown>[] {
 export async function parseArrivalCsv(
   file: File,
   existing: ArrivalBatch[],
+  fieldMappings?: FieldMapping[],
 ): Promise<{ valid: ArrivalBatch[]; invalid: InvalidRowDetail[]; missingColumns: string[] }> {
   const rows = await parseCsvFile(file);
   const firstRow = rows[0] || {};
   const headers = Object.keys(firstRow);
-  const missingColumns = checkMissingColumns(headers, 'arrival');
-  if (missingColumns.length > 0) {
-    return { valid: [], invalid: [], missingColumns };
+
+  if (!fieldMappings || fieldMappings.length === 0) {
+    const missingColumns = checkMissingColumns(headers, 'arrival');
+    if (missingColumns.length > 0) {
+      return { valid: [], invalid: [], missingColumns };
+    }
   }
 
   const existingIds = new Set(existing.map((b) => b.batchId));
@@ -88,7 +321,9 @@ export async function parseArrivalCsv(
   const invalid: InvalidRowDetail[] = [];
 
   rows.forEach((row, idx) => {
-    const r = normalizeRow(row);
+    const r = fieldMappings && fieldMappings.length > 0
+      ? normalizeRowWithMapping(row, fieldMappings)
+      : normalizeRow(row);
     const sourceRow = idx + 2;
     const batchId = String(r.batchid ?? '').trim();
 
@@ -136,13 +371,17 @@ export async function parseArrivalCsv(
 export async function parseLogCsv(
   file: File,
   existing: TemperatureLog[],
+  fieldMappings?: FieldMapping[],
 ): Promise<{ valid: TemperatureLog[]; invalid: InvalidRowDetail[]; missingColumns: string[] }> {
   const rows = await parseCsvFile(file);
   const firstRow = rows[0] || {};
   const headers = Object.keys(firstRow);
-  const missingColumns = checkMissingColumns(headers, 'log');
-  if (missingColumns.length > 0) {
-    return { valid: [], invalid: [], missingColumns };
+
+  if (!fieldMappings || fieldMappings.length === 0) {
+    const missingColumns = checkMissingColumns(headers, 'log');
+    if (missingColumns.length > 0) {
+      return { valid: [], invalid: [], missingColumns };
+    }
   }
 
   const valid: TemperatureLog[] = [];
@@ -150,7 +389,9 @@ export async function parseLogCsv(
   let seq = existing.length;
 
   rows.forEach((row, idx) => {
-    const r = normalizeRow(row);
+    const r = fieldMappings && fieldMappings.length > 0
+      ? normalizeRowWithMapping(row, fieldMappings)
+      : normalizeRow(row);
     const sourceRow = idx + 2;
     const batchId = String(r.batchid ?? '').trim();
     const timestampRaw = String(r.timestamp ?? '').trim();
@@ -185,13 +426,17 @@ export async function parseLogCsv(
 export async function parseReviewCsv(
   file: File,
   existing: ManualReviewRecord[],
+  fieldMappings?: FieldMapping[],
 ): Promise<{ valid: ManualReviewRecord[]; invalid: InvalidRowDetail[]; missingColumns: string[] }> {
   const rows = await parseCsvFile(file);
   const firstRow = rows[0] || {};
   const headers = Object.keys(firstRow);
-  const missingColumns = checkMissingColumns(headers, 'review');
-  if (missingColumns.length > 0) {
-    return { valid: [], invalid: [], missingColumns };
+
+  if (!fieldMappings || fieldMappings.length === 0) {
+    const missingColumns = checkMissingColumns(headers, 'review');
+    if (missingColumns.length > 0) {
+      return { valid: [], invalid: [], missingColumns };
+    }
   }
 
   const valid: ManualReviewRecord[] = [];
@@ -199,7 +444,9 @@ export async function parseReviewCsv(
   let seq = existing.length;
 
   rows.forEach((row, idx) => {
-    const r = normalizeRow(row);
+    const r = fieldMappings && fieldMappings.length > 0
+      ? normalizeRowWithMapping(row, fieldMappings)
+      : normalizeRow(row);
     const sourceRow = idx + 2;
     const batchId = String(r.batchid ?? '').trim();
     const reviewer = String(r.reviewer ?? '').trim();
@@ -364,6 +611,7 @@ export function buildExportJson(
   auditLogs?: AuditLog[],
   reviewRules?: ReviewRules,
   reviewHistory?: Record<string, ReviewHistoryEntry[]>,
+  fieldMappingsSnapshot?: SavedFieldMappings,
 ): string {
   const batchIds = new Set(anomalies.map((a) => a.batchId));
   return JSON.stringify(
@@ -381,6 +629,7 @@ export function buildExportJson(
         ? Object.fromEntries(Object.entries(reviewHistory).filter(([k]) => batchIds.has(k)))
         : undefined,
       auditLogs: auditLogs ?? [],
+      fieldMappings: fieldMappingsSnapshot ?? loadFieldMappings(),
     },
     null,
     2,

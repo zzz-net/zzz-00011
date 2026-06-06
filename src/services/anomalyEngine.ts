@@ -359,6 +359,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   import_arrival: '导入到货清单',
   import_log: '导入温度日志',
   import_review: '导入复核记录',
+  import_blocked: '导入被阻断',
+  field_mapping_changed: '字段映射变更',
   load_sample: '加载样例数据',
   change_rules: '修改复核规则',
   review_decision: '提交复核决策',
